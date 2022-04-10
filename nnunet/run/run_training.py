@@ -166,7 +166,10 @@ def main():
         if not validation_only:
             if args.continue_training:
                 # -c was set, continue a previous training and ignore pretrained weights
-                trainer.load_latest_checkpoint()
+                try:
+                    trainer.load_latest_checkpoint()
+                except RuntimeError:  # no checkpoint found
+                    pass  # continue with new training if no checkpoint found
             elif (not args.continue_training) and (args.pretrained_weights is not None):
                 # we start a new training. If pretrained_weights are set, use them
                 load_pretrained_weights(trainer.network, args.pretrained_weights)
