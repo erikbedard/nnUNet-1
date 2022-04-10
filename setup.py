@@ -18,10 +18,19 @@ setup(name='nnunet',
             "batchgenerators==0.21",
             "numpy",
             "sklearn",
-            "SimpleITK",
+            "SimpleITK==2.0.2",
             "pandas",
             "requests",
-            "nibabel", 'tifffile'
+            "nibabel",
+            "tifffile",
+            "IPython",
+            "graphviz",
+            "hiddenlayer",
+            "pathos",
+            "matplotlib"
+      ],
+      dependency_links=[
+          "git+https://github.com/FabianIsensee/hiddenlayer.git@more_plotted_details#egg=hiddenlayer"
       ],
       entry_points={
           'console_scripts': [
