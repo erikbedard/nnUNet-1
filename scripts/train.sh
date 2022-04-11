@@ -1,13 +1,14 @@
 #!/bin/bash
+#SBATCH --ntasks=1
 #SBATCH --account=def-branzana
 #SBATCH --gpus-per-task=1
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --time=0-72:00
 #SBATCH --cpus-per-gpu=16
 
-# USAGE: sbatch train.sh TASK_NUM NET FOLD
+# USAGE: sbatch train.sh TASK_NUM NET FOLD PASSWORD
 
-# arg1: task num
+# arg1: task num (e.g. 600)
 # arg2: network [2d, 3d_fullres, 3d_lowres, 3d_cascade_fullres]
 # arg3: fold [0, 1, 2, 3, 4]
 # arg4: password for decryption (if needed)
@@ -15,6 +16,10 @@ TASK_NUM=$1
 NET=$2
 FOLD=$3
 PASSWORD=$4
+
+TASK_START_TIME=$(date +%s)
+echo "$(date +"%Y-%m-%d %H:%M:%S"): Starting task..."
+nvidia-smi
 
 
 # create unique dir for this task
@@ -66,5 +71,11 @@ NPROC=$(nproc)
 nnUNet_plan_and_preprocess -tl $NPROC -tf $NPROC -t $TASK_NUM
 nnUNet_train $NET nnUNetTrainerV2 $TASK_NUM $FOLD --npz -c
 
+
+TASK_END_TIME=$(date +%s)
+echo "$(date +"%Y-%m-%d %H:%M:%S"): Task complete."
+HOURS=$(( (TASK_END_TIME - TASK_START_TIME) / 3600 ))
+MINS=$(( (TASK_END_TIME - TASK_START_TIME) / 60 ))
+echo "Task execution time: $HOURS h $MINS m"
 
 exit
