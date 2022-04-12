@@ -5,19 +5,15 @@
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --time=0-71:59         # Choose 3h,12h,24h,72h,7d,28d, or less
 #SBATCH --cpus-per-gpu=1
-#SBATCH --job-name=$1-$2-$3.run
-#SBATCH --output=slurm-%j-$1-$2-$3.run
+#SBATCH --job-name=$TASK_NUM-$NET-$FOLD.run
+#SBATCH --output=slurm-%j-$TASK_NUM-$NET-$FOLD.run
 
-# USAGE: sbatch train.sh TASK_NUM NET FOLD PASSWORD
+# USAGE: sbatch --export=TASK_NUM=T,NET=N,FOLD=F,PASSWORD=P train.sh
+# T: 3 digit task number [000-999]
+# N: network to train, one of [2d, 3d_fullres, 3d_lowres, 3d_cascade_fullres]
+# F: desired fold, one of [0, 1, 2, 3, 4]
+# P: password for decryption (optional, if needed)
 
-# arg1: task num (e.g. 600)
-# arg2: network [2d, 3d_fullres, 3d_lowres, 3d_cascade_fullres]
-# arg3: fold [0, 1, 2, 3, 4]
-# arg4: password for decryption (if needed)
-TASK_NUM=$1
-NET=$2
-FOLD=$3
-PASSWORD=$4
 
 TASK_START_TIME=$(date +%s)
 echo "$(date +"%Y-%m-%d %H:%M:%S"): Starting task..."
