@@ -4,7 +4,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --time=0-71:59         # Choose 3h,12h,24h,72h,7d,28d, or less
-#SBATCH --cpus-per-gpu=1
+#SBATCH --cpus-per-gpu=16
 
 # USAGE:
 # TASK_NUM=T
