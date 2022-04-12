@@ -5,10 +5,15 @@
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --time=0-71:59         # Choose 3h,12h,24h,72h,7d,28d, or less
 #SBATCH --cpus-per-gpu=1
-#SBATCH --job-name=$TASK_NUM-$NET-$FOLD.run
-#SBATCH --output=slurm-%j-$TASK_NUM-$NET-$FOLD.run
 
-# USAGE: sbatch --export=TASK_NUM=T,NET=N,FOLD=F,PASSWORD=P train.sh
+# USAGE:
+# TASK_NUM=T
+# NET=N
+# FOLD=F
+# PASSWORD=P
+# sbatch --job-name="$TASK_NUM-$FOLD-$NET" --output="$TASK_NUM-$NET-$FOLD.out" --export=TASK_NUM,NET,FOLD,PASSWORD /home/ebedard/source/nnUNet-1/scripts/train.sh
+
+# Where:
 # T: 3 digit task number [000-999]
 # N: network to train, one of [2d, 3d_fullres, 3d_lowres, 3d_cascade_fullres]
 # F: desired fold, one of [0, 1, 2, 3, 4]
