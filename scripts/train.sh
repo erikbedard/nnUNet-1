@@ -3,8 +3,10 @@
 #SBATCH --account=def-branzana
 #SBATCH --gpus-per-task=1
 #SBATCH --mem-per-cpu=8000M
-#SBATCH --time=0-72:00
-#SBATCH --cpus-per-gpu=16
+#SBATCH --time=0-71:59         # Choose 3h,12h,24h,72h,7d,28d, or less
+#SBATCH --cpus-per-gpu=1
+#SBATCH --job-name=$1-$2-$3.run
+#SBATCH --output=slurm-%j-$1-$2-$3.run
 
 # USAGE: sbatch train.sh TASK_NUM NET FOLD PASSWORD
 
@@ -19,6 +21,7 @@ PASSWORD=$4
 
 TASK_START_TIME=$(date +%s)
 echo "$(date +"%Y-%m-%d %H:%M:%S"): Starting task..."
+echo "Task: $TASK_NUM, Net: $NET, Fold: $FOLD"
 nvidia-smi
 
 
@@ -44,6 +47,7 @@ mkdir "$SOURCE_DIR_TEMP"
 cd "$SOURCE_DIR_TEMP"
 git clone https://github.com/erikbedard/nnUNet-1.git
 
+module load python/3.8
 VENV_TEMP=$TASK_DIR/venv/nnUNet-temp
 virtualenv --no-download "$VENV_TEMP"
 source "$VENV_TEMP"/bin/activate
@@ -61,15 +65,21 @@ cp -r "$DATA_ITEM_PATH" "$LOCAL_DATA_DIR"
 
 # decrypt if encrypted
 if [[ "$DATA_ITEM_BASE" == *.tar.gpg ]]; then
-cd "$LOCAL_DATA_DIR"
-source "$SOURCE_DIR_TEMP"/nnUNet-1/scripts/decrypt.sh "$DATA_ITEM_BASE" "$PASSWORD"
+  cd "$LOCAL_DATA_DIR"
+  source "$SOURCE_DIR_TEMP"/nnUNet-1/scripts/decrypt.sh "$DATA_ITEM_BASE" "$PASSWORD"
 fi
 
 
 # run nnUNet
 NPROC=$(nproc)
 nnUNet_plan_and_preprocess -tl $NPROC -tf $NPROC -t $TASK_NUM
-nnUNet_train $NET nnUNetTrainerV2 $TASK_NUM $FOLD --npz -c
+
+if [[ "$NET" == "3d_cascade_fullres" ]]; then
+  TRAINER="3d_cascade_fullres"
+else
+  TRAINER="nnUNetTrainerV2"
+fi
+nnUNet_train $NET $TRAINER $TASK_NUM $FOLD --npz -c
 
 
 TASK_END_TIME=$(date +%s)
