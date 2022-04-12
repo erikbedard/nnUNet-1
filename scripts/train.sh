@@ -75,7 +75,7 @@ NPROC=$(nproc)
 nnUNet_plan_and_preprocess -tl $NPROC -tf $NPROC -t $TASK_NUM
 
 if [[ "$NET" == "3d_cascade_fullres" ]]; then
-  TRAINER="3d_cascade_fullres"
+  TRAINER="nnUNetTrainerV2CascadeFullRes"
 else
   TRAINER="nnUNetTrainerV2"
 fi
