@@ -7,17 +7,17 @@
 #SBATCH --cpus-per-gpu=16
 
 # USAGE:
-# TASK_NUM=T
-# NET=N
-# FOLD=F
-# PASSWORD=P
-# sbatch --job-name="$TASK_NUM-$FOLD-$NET" --output="$TASK_NUM-$NET-$FOLD.out" --export=TASK_NUM,NET,FOLD,PASSWORD /home/ebedard/source/nnUNet-1/scripts/train.sh
+# T=###
+# N=%%%
+# F=#
+# P=%%%%%%
+# sbatch --job-name="$T-$F-$N" --output="$T-$N-$F.out" --export=T=$T,N=$N,FOLD=$F,P=$P /home/ebedard/source/nnUNet-1/scripts/train.sh
 
 # Where:
-# T: 3 digit task number [000-999]
-# N: network to train, one of [2d, 3d_fullres, 3d_lowres, 3d_cascade_fullres]
-# F: desired fold, one of [0, 1, 2, 3, 4]
-# P: password for decryption (optional, if needed)
+TASK_NUM=$T # 3 digit task number [000-999]
+NET=$N      # network to train, one of [2d, 3d_fullres, 3d_lowres, 3d_cascade_fullres]
+FOLD=$F     # desired fold, one of [0, 1, 2, 3, 4]
+PASSWORD=$P # password for decryption (optional, if needed)
 
 
 TASK_START_TIME=$(date +%s)
@@ -86,7 +86,7 @@ nnUNet_train $NET $TRAINER $TASK_NUM $FOLD --npz -c
 TASK_END_TIME=$(date +%s)
 echo "$(date +"%Y-%m-%d %H:%M:%S"): Task complete."
 HOURS=$(( (TASK_END_TIME - TASK_START_TIME) / 3600 ))
-MINS=$(( (TASK_END_TIME - TASK_START_TIME) / 60 ))
+MINS=$(( (TASK_END_TIME - TASK_START_TIME) / 60 % 60 ))
 echo "Task execution time: $HOURS h $MINS m"
 
 exit
