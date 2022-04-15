@@ -11,7 +11,7 @@
 # N=%%%
 # F=#
 # P=%%%%%%
-# sbatch --job-name="$T-$F-$N" --output="$T-$N-$F.out" --export=T=$T,N=$N,FOLD=$F,P=$P /home/ebedard/source/nnUNet-1/scripts/train.sh
+# sbatch --job-name="$T-$F-$N" --output="$T-$N-$F.out" --export=T=$T,N=$N,F=$F,P=$P /home/ebedard/source/nnUNet-1/scripts/train.sh
 
 # Where:
 TASK_NUM=$T # 3 digit task number [000-999]
@@ -36,6 +36,9 @@ mkdir "$TASK_DIR"
 export nnUNet_raw_data_base=$TASK_DIR/nnUNet_raw_data_base
 export nnUNet_preprocessed=$TASK_DIR/nnUNet_preprocessed
 export RESULTS_FOLDER=/project/def-branzana/ebedard/nnUNet_trained_models
+NPROC=$(nproc)
+export nnUNet_n_proc_DA=$NPROC
+export nnUNet_def_n_proc=$NPROC
 
 mkdir "$nnUNet_raw_data_base"
 mkdir "$nnUNet_raw_data_base"/nnUNet_raw_data
@@ -72,7 +75,6 @@ fi
 
 
 # run nnUNet
-NPROC=$(nproc)
 nnUNet_plan_and_preprocess -tl $NPROC -tf $NPROC -t $TASK_NUM
 
 if [[ "$NET" == "3d_cascade_fullres" ]]; then
