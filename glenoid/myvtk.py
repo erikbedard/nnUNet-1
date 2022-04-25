@@ -1,10 +1,11 @@
+import pyvista
 from vtkmodules.all import *
 
 # noinspection PyUnresolvedReferences
 import vtkmodules.vtkInteractionStyle
 # noinspection PyUnresolvedReferences
 import vtkmodules.vtkRenderingOpenGL2
-
+from vtk.util.numpy_support import *
 import numpy as np
 
 
@@ -16,7 +17,7 @@ def _get_rgb(color):
     # https://htmlpreview.github.io/?https://github.com/Kitware/vtk-examples/blob/gh-pages/VTKNamedColorPatches.html
     if type(color) is str:
         colors = vtkNamedColors()
-        return colors.GetColor3d(color)
+        return list(colors.GetColor3d(color))
     else:
         return color
 
@@ -77,12 +78,26 @@ def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato'):
         polydata:
         color:
     """
+    rgb = _get_rgb(color)
+    rgba = rgb.copy()
+    rgba.append(1)
     mapper = vtkPolyDataMapper()
     mapper.SetInputData(polydata)
 
+    # handle scalar data
+    lut = vtkLookupTable()
+    lut.SetNumberOfTableValues(1)
+    lut.SetTableValue(0, rgba)
+    lut.Build()
+    mapper.SetScalarRange(1, 1)
+    mapper.SetScalarModeToUseCellData()
+    mapper.SetColorModeToMapScalars()
+    mapper.SetLookupTable(lut)
+
     actor = vtkActor()
     actor.SetMapper(mapper)
-    actor.GetProperty().SetColor(_get_rgb(color))
+    actor.GetProperty().SetColor(rgb)
+
 
     renderer.AddActor(actor)
 
@@ -105,6 +120,8 @@ def show_scene(renderer: vtkRenderer, bg_color='white', window_name='VTK', windo
     renWin.Render()
 
     iren = vtkRenderWindowInteractor()
+    style = vtkInteractorStyleTrackballCamera()
+    iren.SetInteractorStyle(style)
     iren.SetRenderWindow(renWin)
     iren.Initialize()
     iren.Start()
@@ -292,7 +309,7 @@ def convert_voxels_to_poly(binary_mask: vtkImageData, method='flying_edges'):
     # Marching cubes + smoothing example:
     # https://kitware.github.io/vtk-examples/site/Python/Visualization/FrogBrain/
 
-    valid_methods = ['flying_edges', 'marching_cubes', 'boundary']
+    valid_methods = ['flying_edges', 'marching_cubes', 'preserve_boundary']
     if method is 'flying_edges' or method is 'marching_cubes':
         if method is 'flying_edges':
             surface = vtkDiscreteFlyingEdges3D()
@@ -304,19 +321,14 @@ def convert_voxels_to_poly(binary_mask: vtkImageData, method='flying_edges'):
         surface.ComputeScalarsOff()
         surface.ComputeNormalsOff()
         surface.ComputeGradientsOff()
+        surface.Update()
+        poly = surface.GetOutput()
 
-    elif method is 'boundary':
-        geometry = vtkImageDataGeometryFilter()
-        geometry.SetInputData(binary_mask)
-        geometry.Update()
-        poly = geometry.GetOutput()
-        ugrid = get_foreground_from_labels(poly, 1)
+    elif method is 'preserve_boundary':
+        foreground_label = 1
+        poly = convert_voxels_to_cube_mesh(binary_mask, foreground_label)
 
-        surface = vtkGeometryFilter()
-        surface.SetInputData(ugrid)
-
-    surface.Update()
-    return surface.GetOutput()
+    return poly
 
 
 def extract_mesh_data(triangle_mesh: vtkPolyData):
@@ -421,3 +433,59 @@ def create_pointcloud_polydata(points, colors=None):
     vpoly.SetVerts(vcells)
 
     return vpoly
+
+
+def convert_voxels_to_cube_mesh(image: vtkImageData, label_num: int):
+    """
+    Extracts a binary mask from an image label and converts it into a triangulated
+    surface mesh which preserves the original cubic shape of the label's voxels.
+    Args:
+        image: image with integer labels
+        label_num: the label which will be extracted
+
+    Returns:
+        vtkPolyData object with triangulated mesh
+
+    """
+    # Based on:
+    # https://kitware.github.io/vtk-examples/site/Python/Medical/GenerateCubesFromLabels/
+
+    # Pad the volume so that we can change the point data into cell
+    # data.
+    extent = image.GetExtent()
+    pad = vtkImageWrapPad()
+    pad.SetInputData(image)
+    pad.SetOutputWholeExtent(extent[0], extent[1] + 1, extent[2], extent[3] + 1, extent[4], extent[5] + 1)
+    pad.Update()
+
+    # Copy the scalar point data of the volume into the scalar cell data
+    pad.GetOutput().GetCellData().SetScalars(image.GetPointData().GetScalars())
+
+    selector = vtkThreshold()
+    selector.SetInputArrayToProcess(0, 0, 0, vtkDataObject().FIELD_ASSOCIATION_CELLS,
+                                    vtkDataSetAttributes().SCALARS)
+    selector.SetInputConnection(pad.GetOutputPort())
+    selector.SetLowerThreshold(label_num)
+    selector.SetUpperThreshold(label_num)
+    selector.Update()
+
+    # # Shift the geometry by 1/2
+    # transform = vtkTransform()
+    # transform.Translate(-0.5, -0.5, -0.5)
+    #
+    # transform_model = vtkTransformFilter()
+    # transform_model.SetTransform(transform)
+    # transform_model.SetInputConnection(selector.GetOutputPort())
+    transform_model = selector
+
+    geometry = vtkGeometryFilter()
+    geometry.SetInputConnection(transform_model.GetOutputPort())
+    geometry.Update()
+
+    trifilter = vtkTriangleFilter()
+    trifilter.SetInputData(geometry.GetOutput())
+    trifilter.PassVertsOff()
+    trifilter.PassLinesOff()
+    trifilter.Update()
+
+    return trifilter.GetOutput()

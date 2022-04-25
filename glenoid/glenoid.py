@@ -15,16 +15,24 @@ def main():
     scapula_label_num = 1
     humerus_label_num = 2
 
-    # # extract binary masks
+    # # extract binary mask
     # np_labels = myvtk.convert_image_to_numpy(labels)
     # scapula = (np_labels == scapula_label_num).astype('uint8')
-    # humerus = (np_labels == humerus_label_num).astype('uint8')
 
     # create scapula mesh
+    preserve_boundary = False
+
     scapula_mask = myvtk.get_mask_from_labels(labels, scapula_label_num)
-    scapula_mesh = myvtk.convert_voxels_to_poly(scapula_mask, method='flying_edges')
-    scapula_mesh = myvtk.decimate_polydata(scapula_mesh, target=10000)
-    scapula_mesh = myvtk.smooth_polydata(scapula_mesh, n_iterations=30)
+    if preserve_boundary is True:
+        method = 'preserve_boundary'
+        scapula_mesh = myvtk.convert_voxels_to_poly(scapula_mask, method=method)
+    else:
+        method = 'flying_edges'
+        scapula_mesh = myvtk.convert_voxels_to_poly(scapula_mask, method=method)
+        scapula_mesh = myvtk.decimate_polydata(scapula_mesh, target=10000)
+        scapula_mesh = myvtk.smooth_polydata(scapula_mesh, n_iterations=30)
+
+
 
     # goal is to find a seed point on the glenoid
 
