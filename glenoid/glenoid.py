@@ -9,29 +9,15 @@ from vtkmodules.vtkRenderingCore import vtkRenderer
 
 def main():
     filepath = r"C:\erik\data\nnUNet\predictions\Task600\pred_imagesTr\final_output\ACD.nii.gz"
-    label_num = 1  # scapula label
 
     labels = myvtk.read_nifti(filepath)
     scapula_label_num = 1
-    humerus_label_num = 2
 
     # # extract binary mask
     # np_labels = myvtk.convert_image_to_numpy(labels)
     # scapula = (np_labels == scapula_label_num).astype('uint8')
 
-    # create scapula mesh
-    preserve_boundary = False
-
-    scapula_mask = myvtk.get_mask_from_labels(labels, scapula_label_num)
-    if preserve_boundary is True:
-        method = 'preserve_boundary'
-        scapula_mesh = myvtk.convert_voxels_to_poly(scapula_mask, method=method)
-    else:
-        method = 'flying_edges'
-        scapula_mesh = myvtk.convert_voxels_to_poly(scapula_mask, method=method)
-        scapula_mesh = myvtk.decimate_polydata(scapula_mesh, target=10000)
-        scapula_mesh = myvtk.smooth_polydata(scapula_mesh, n_iterations=30)
-
+    scapula_mesh = myvtk.create_mesh_from_image_labels(labels, scapula_label_num, preserve_boundary=False)
 
 
     # goal is to find a seed point on the glenoid
@@ -52,7 +38,7 @@ def main():
     closest_points = np.zeros(midpoints.shape)
     for i in range(num_midpoints):
         query = midpoints[i]
-        closest_points[i], distances[i] = myvtk.find_closest_point(query, scapula_mesh)
+        closest_points[i], distances[i], _ = myvtk.find_closest_point(scapula_mesh, query)
 
     # the midpoint (MP) which is furthest from the scapula must lie between glenoid and acromion
     ind = np.argmax(distances)
@@ -70,15 +56,28 @@ def main():
         inferior_angle = p1
         point_on_glenoid = intersect_pts[2]  # 0 is coincident, 1 is acromion surface, 2 is glenoid
 
+    # find approximate center of glenoid
+    breadth = 12
+    max_dist = 10
+    mesh_curves = myvtk.calc_curvature(scapula_mesh, method='mean')
+    _, _, seed_point_id = myvtk.find_closest_point(scapula_mesh, point_on_glenoid)
+    min_point_id = myvtk.minimize_local_scalar(mesh_curves, seed_point_id, breadth, max_dist)
+    glenoid_centre_point = mesh_curves.GetPoint(min_point_id)
+
+
 
     filename = os.path.basename(filepath).split('.')[0]
     save_path = r"C:\erik" + os.path.sep + filename + ".stl"
     myvtk.save_stl(save_path, scapula_mesh)
 
     renderer = vtkRenderer()
+    camera = renderer.GetActiveCamera()
+    camera.SetFocalPoint(glenoid_centre_point)
+
     myvtk.plt_polydata(renderer, scapula_mesh, color='cornsilk')
     myvtk.plt_point(renderer, midpoint_near_glenoid, radius=1, color='black')
-    myvtk.plt_point(renderer, point_on_glenoid, radius=1, color='red')
+    myvtk.plt_point(renderer, point_on_glenoid, radius=1, color='blue')
+    myvtk.plt_point(renderer, glenoid_centre_point, radius=1, color='red')
     myvtk.plt_point(renderer, acromion_angle, radius=1, color='black')
     myvtk.plt_point(renderer, inferior_angle, radius=1, color='black')
     myvtk.plt_line(renderer, p1, p2, color='red')

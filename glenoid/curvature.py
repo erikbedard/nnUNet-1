@@ -1,80 +1,35 @@
 # this module borrows heavily from the vtk example:
-# https://kitware.github.io/vtk-examples/site/Cxx/Visualization/CurvatureBandsWithGlyphs/
+# https://kitware.github.io/vtk-examples/site/Python/Visualization/CurvatureBandsWithGlyphs/
 
 import numpy as np
-from vtkmodules.numpy_interface import dataset_adapter as dsa
-from vtkmodules.vtkCommonColor import (
-    vtkColorSeries,
-    vtkNamedColors
-)
-from vtkmodules.vtkCommonCore import (
-    VTK_DOUBLE,
-    vtkIdList,
-    vtkLookupTable,
-    vtkVariant,
-    vtkVariantArray,
-)
-from vtkmodules.vtkFiltersCore import (
-    vtkFeatureEdges,
-    vtkIdFilter,
-)
-from vtkmodules.vtkFiltersGeneral import (
-    vtkCurvatures,
-)
-from vtkmodules.vtkFiltersModeling import vtkBandedPolyDataContourFilter
-from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
-from vtkmodules.vtkRenderingAnnotation import vtkScalarBarActor
-from vtkmodules.vtkRenderingCore import (
-    vtkActor,
-    vtkColorTransferFunction,
-    vtkPolyDataMapper,
-    vtkRenderWindow,
-    vtkRenderWindowInteractor,
-    vtkRenderer
-)
 
+from vtkmodules.all import *
 from vtk.util import numpy_support
-from myvtk import read_stl
+from vtkmodules.numpy_interface import dataset_adapter as dsa
+import myvtk
 
 
 def main():
-
-    mesh = read_stl(r"C:\erik\ACD.stl")
-
-    curv_obj = vtkCurvatures()
-    curv_obj.SetInputData(mesh)
+    filepath = r"C:\erik\data\nnUNet\predictions\Task600\pred_imagesTr\final_output\ACD.nii.gz"
+    labels = myvtk.read_nifti(filepath)
+    scapula_label_num = 1
+    mesh = myvtk.create_mesh_from_image_labels(labels, scapula_label_num, preserve_boundary=False)
 
     curvature_type = 'mean'
-    available_curvatures = ['gaussian', 'mean', 'max', 'min']
-    if curvature_type is 'gaussian':
-        curvature_str = 'Gauss_Curvature'
-        curv_obj.SetCurvatureTypeToGaussian()
+    curvature_str = "Mean_Curvature"
+    curv_obj = myvtk.calc_curvature(mesh, curvature_type)
 
-    elif curvature_type is 'mean':
-        curv_obj.SetCurvatureTypeToMean()
-        curvature_str = 'Mean_Curvature'
+    # do_adjust_curve = True
+    # if do_adjust_curve:
+    #     adjust_edge_curvatures(curv_obj.GetOutput(), curvature_str)
 
-    elif curvature_type is 'max':
-        curv_obj.SetCurvatureTypeToMaximum()
-        curvature_str = 'Max_Curvature'
-
-    elif curvature_type is 'min':
-        curv_obj.SetCurvatureTypeToMinimum()
-        curvature_str = 'Min_Curvature'
-
-    curv_obj.Update()
-
-    do_adjust_curve = True
-    if do_adjust_curve:
-        adjust_edge_curvatures(curv_obj.GetOutput(), curvature_str)
-
-    curv_obj.GetOutput().GetPointData().SetActiveScalars(curvature_str)
-    scalar_range_curvatures = curv_obj.GetOutput().GetPointData().GetScalars(curvature_str).GetRange()
+    curv_obj.GetPointData().SetActiveScalars(curvature_str)
+    scalar_range_curvatures = curv_obj.GetPointData().GetScalars(curvature_str).GetRange()
 
     lut = get_categorical_lut()
     lut.SetTableRange(scalar_range_curvatures)
 
-    t = 0.01
+    t = 0.08
     my_bands = [
         [scalar_range_curvatures[0], -t],
         [-t, t],
@@ -88,17 +43,16 @@ def main():
 
     # Let's do a frequency table.
     # The number of scalars in each band.
-    freq = get_frequencies(bands, curv_obj.GetOutput())
+    freq = get_frequencies(bands, curv_obj)
     bands, freq = adjust_ranges(bands, freq)
     print_bands_frequencies(bands, freq)
 
     lut.SetTableRange(scalar_range_curvatures)
-    lut.SetNumberOfTableValues(len(bands))
+    lut.SetNumberOfTableValues(len(my_bands))
 
-    # We will use the midpoint of the band as the label.
-    labels = []
-    for k in bands:
-        labels.append('{:4.2f}'.format(bands[k][1]))
+
+    labels = [-t, 0, t]
+
 
     # Annotate
     values = vtkVariantArray()
@@ -112,13 +66,33 @@ def main():
 
     # Create the contour bands.
     bcf = vtkBandedPolyDataContourFilter()
-    bcf.SetInputData(curv_obj.GetOutput())
+    bcf.SetInputData(curv_obj)
     # Use either the minimum or maximum value for each band.
     for k in bands:
         bcf.SetValue(k, bands[k][2])
     # We will use an indexed lookup table.
     bcf.SetScalarModeToIndex()
     bcf.GenerateContourEdgesOn()
+
+
+
+    p = [179.0428772, 105.8322525, 133.18827057]
+    seed_point, _, seed_point_id = myvtk.find_closest_point(curv_obj, p)
+
+    s = myvtk.get_scalars(curv_obj, seed_point_id)
+
+    breadth = 12
+    max_dist = 10
+    min_point_id = myvtk.minimize_local_scalar(curv_obj, seed_point_id, breadth, max_dist)
+    min_point = curv_obj.GetPoint(min_point_id)
+
+    n_hood = myvtk.get_neighbourhood(curv_obj, min_point_id, breadth=8, max_dist=5)
+
+
+
+
+    x=1
+
 
 
     # mesh = bcf.GetOutput()
@@ -204,6 +178,11 @@ def main():
     style = vtkInteractorStyleTrackballCamera()
     iren.SetInteractorStyle(style)
 
+    myvtk.plt_point(ren, seed_point, radius=0.5, color='blue')
+    myvtk.plt_point(ren, min_point, radius=0.5, color='red')
+    for p in n_hood:
+        myvtk.plt_point(ren, curv_obj.GetPoint(p), radius=0.25, color='black')
+
     ren_win.AddRenderer(ren)
     # Important: The interactor must be set prior to enabling the widget.
     iren.SetRenderWindow(ren_win)
@@ -216,6 +195,13 @@ def main():
     ren.SetBackground(colors.GetColor3d('ParaViewBkg'))
     ren_win.SetSize(window_width, window_height)
     ren_win.SetWindowName('Scapula')
+
+    camera = ren.GetActiveCamera()
+    #camera.SetPosition(42.301174, 939.893457, -124.005030)
+    camera.SetFocalPoint(min_point)
+    #camera.SetViewUp(0.262286, -0.281321, -0.923073)
+    #camera.SetDistance(789.297581)
+    #camera.SetClippingRange(168.744328, 1509.660206)
 
 
     iren.Start()
@@ -234,28 +220,7 @@ def adjust_edge_curvatures(source, curvature_name, epsilon=1.0e-08):
     :return:
     """
 
-    def point_neighbourhood(pt_id):
-        """
-        Find the ids of the neighbours of pt_id.
 
-        :param pt_id: The point id.
-        :return: The neighbour ids.
-        """
-        """
-        Extract the topological neighbors for point pId. In two steps:
-        1) source.GetPointCells(pt_id, cell_ids)
-        2) source.GetCellPoints(cell_id, cell_point_ids) for all cell_id in cell_ids
-        """
-        cell_ids = vtkIdList()
-        source.GetPointCells(pt_id, cell_ids)
-        neighbour = set()
-        for cell_idx in range(0, cell_ids.GetNumberOfIds()):
-            cell_id = cell_ids.GetId(cell_idx)
-            cell_point_ids = vtkIdList()
-            source.GetCellPoints(cell_id, cell_point_ids)
-            for cell_pt_idx in range(0, cell_point_ids.GetNumberOfIds()):
-                neighbour.add(cell_point_ids.GetId(cell_pt_idx))
-        return neighbour
 
     def compute_distance(pt_id_a, pt_id_b):
         """
@@ -303,7 +268,7 @@ def adjust_edge_curvatures(source, curvature_name, epsilon=1.0e-08):
     # average of the neighbours.
     count_invalid = 0
     for p_id in boundary_ids:
-        p_ids_neighbors = point_neighbourhood(p_id)
+        p_ids_neighbors = myvtk.get_point_neighbourhood(p_id, source)
         # Keep only interior points.
         p_ids_neighbors -= p_ids_set
         # Compute distances and extract curvature values.
@@ -587,6 +552,5 @@ def print_bands_frequencies(bands, freq, precision=2):
 
 
 if __name__ == '__main__':
-    import sys
 
-    main(sys.argv)
+    main()

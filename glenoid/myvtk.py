@@ -7,19 +7,30 @@ import vtkmodules.vtkInteractionStyle
 import vtkmodules.vtkRenderingOpenGL2
 from vtk.util.numpy_support import *
 import numpy as np
+import copy
+import statistics
 
 
-def _get_rgb(color):
+def get_rgba(color, a=1):
+    rgb = get_rgb(color)
+    rgba = rgb.copy()
+    rgba.append(a)
+    return rgba
+
+
+def get_rgb(color):
     # input is either RGB triplet or named color
     # output is an RGB triplet
     #
     # see list of acceptable color names here:
     # https://htmlpreview.github.io/?https://github.com/Kitware/vtk-examples/blob/gh-pages/VTKNamedColorPatches.html
+
     if type(color) is str:
         colors = vtkNamedColors()
-        return list(colors.GetColor3d(color))
+        rgb = list(colors.GetColor3d(color))
     else:
-        return color
+        rgb = list(color)
+    return rgb
 
 
 def plt_point(renderer: vtkRenderer, p, radius=1.0, color='black'):
@@ -42,7 +53,7 @@ def plt_point(renderer: vtkRenderer, p, radius=1.0, color='black'):
 
     actor = vtkActor()
     actor.SetMapper(mapper)
-    actor.GetProperty().SetColor(_get_rgb(color))
+    actor.GetProperty().SetColor(get_rgb(color))
 
     renderer.AddActor(actor)
 
@@ -65,7 +76,7 @@ def plt_line(renderer: vtkRenderer, p1, p2, color='blue'):
 
     actor = vtkActor()
     actor.SetMapper(mapper)
-    actor.GetProperty().SetColor(_get_rgb(color))
+    actor.GetProperty().SetColor(get_rgb(color))
 
     renderer.AddActor(actor)
 
@@ -78,9 +89,8 @@ def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato'):
         polydata:
         color:
     """
-    rgb = _get_rgb(color)
-    rgba = rgb.copy()
-    rgba.append(1)
+    rgb = get_rgb(color)
+    rgba = get_rgba(color)
     mapper = vtkPolyDataMapper()
     mapper.SetInputData(polydata)
 
@@ -98,7 +108,6 @@ def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato'):
     actor.SetMapper(mapper)
     actor.GetProperty().SetColor(rgb)
 
-
     renderer.AddActor(actor)
 
 
@@ -111,7 +120,7 @@ def show_scene(renderer: vtkRenderer, bg_color='white', window_name='VTK', windo
         window_name:
         window_size:
     """
-    renderer.SetBackground(_get_rgb(bg_color))
+    renderer.SetBackground(get_rgb(bg_color))
 
     renWin = vtkRenderWindow()
     renWin.AddRenderer(renderer)
@@ -143,6 +152,30 @@ def get_mask_from_labels(image: vtkImageData, label_num: int):
     threshold.SetOutValue(0)
     threshold.Update()
     return threshold.GetOutput()
+
+
+def calc_curvature(poly: vtkPolyData, method='mean'):
+    curves = vtkCurvatures()
+    curves.SetInputData(poly)
+
+    available_curves = ['gaussian', 'mean', 'max', 'min']
+    if method is 'gaussian':
+        curves.SetCurvatureTypeToGaussian()
+
+    elif method is 'mean':
+        curves.SetCurvatureTypeToMean()
+
+    elif method is 'max':
+        curves.SetCurvatureTypeToMaximum()
+
+    elif method is 'min':
+        curves.SetCurvatureTypeToMinimum()
+
+    else:
+        return RuntimeError
+
+    curves.Update()
+    return curves.GetOutput()
 
 
 def get_foreground_from_labels(poly: vtkPolyData, label_num: int):
@@ -363,7 +396,7 @@ def extract_mesh_data(triangle_mesh: vtkPolyData):
     return np.asarray(vertex_list), np.asarray(face_list)
 
 
-def find_closest_point(point, poly: vtkPolyData):
+def find_closest_point(poly: vtkPolyData, point):
     """
     Find point on polydata that is closest to the query point.
     Args:
@@ -371,7 +404,9 @@ def find_closest_point(point, poly: vtkPolyData):
         poly:
 
     Returns:
-        closest point
+        closest_point: point coordinates
+        distance: signed distance from surface to query (-ve inside, +ve outside)
+        point_id: ID of the closest_point
     """
     locator = vtkKdTreePointLocator()  # can also use vtkPointLocator (slower)
     locator.SetDataSet(poly)
@@ -386,7 +421,7 @@ def find_closest_point(point, poly: vtkPolyData):
         distance = -distance  # inside
     else:
         pass  # outside
-    return closest_point, distance
+    return closest_point, distance, point_id
 
 
 def clean_polydata(poly: vtkPolyData):
@@ -482,6 +517,7 @@ def convert_voxels_to_cube_mesh(image: vtkImageData, label_num: int):
     geometry.SetInputConnection(transform_model.GetOutputPort())
     geometry.Update()
 
+    # convert into triangulated mesh for ease of further processing (e.g. smooth filter)
     trifilter = vtkTriangleFilter()
     trifilter.SetInputData(geometry.GetOutput())
     trifilter.PassVertsOff()
@@ -489,3 +525,157 @@ def convert_voxels_to_cube_mesh(image: vtkImageData, label_num: int):
     trifilter.Update()
 
     return trifilter.GetOutput()
+
+
+def create_mesh_from_image_labels(image_labels: vtkImageData, label_num: int, preserve_boundary=True):
+    mask = get_mask_from_labels(image_labels, label_num)
+    if preserve_boundary is True:
+        method = 'preserve_boundary'
+        mesh = convert_voxels_to_poly(mask, method=method)
+    else:
+        method = 'flying_edges'
+        mesh = convert_voxels_to_poly(mask, method=method)
+        mesh = decimate_polydata(mesh, target=10000)
+        mesh = smooth_polydata(mesh, n_iterations=15)
+
+    return mesh
+
+
+def get_neighbourhood(source: vtkPolyData, pt_id, breadth=1, max_dist=None):
+    """
+    Find the ids of the neighbours of pt_id.
+
+    Control the size of the neighbourhood with the breadth parameter, e.g.:
+        If breadth=1, return the point's immediate neighbours.
+        If breadth=2, return the point's neighbours, as well as each neighbour's neighbours.
+
+    Restrict the neighbourhood to be within a specified distance using max_dist.
+    To select all points within max_dist radius of pt_id, breadth should be sufficiently high to ensure that a
+    sufficient number of neighbours are intially found.
+    max_dist and breadth correlate, and should both be increased/decreased proportionally for best results. The exact
+    values to be chosen depend on the specific triangulation pattern and the average edge length. Longer edges mean that
+    a smaller breadth is needed before sufficient points are found within max_dist.
+
+    Args:
+        pt_id: The point id
+        source: Target mesh
+        breadth: How "broad" the neighbourhood should be.
+        max_dist: Neighbouring points further than this value will be excluded from the neighbourhood
+
+    Returns:
+        set of all neighbouring point IDs
+
+    """
+
+    n_hood = _get_neighbourhood(source, pt_id)
+    for i in range(1, breadth):
+        n_hood_copy = copy.deepcopy(n_hood)
+        for point_id in n_hood_copy:
+            local_n_hood = _get_neighbourhood(source, point_id)
+            n_hood.update(local_n_hood)
+
+
+    # filter out points which are too far
+    if max_dist is not None:
+        n_hood_copy = copy.deepcopy(n_hood)
+        for neighbour_id in n_hood_copy:
+            distance = compute_distance(source, pt_id, neighbour_id)
+            if distance > max_dist:
+                n_hood.remove(neighbour_id)
+
+    return n_hood
+
+
+def _get_neighbourhood(source: vtkPolyData, pt_id):
+    """
+    Find the ids of the neighbours of pt_id.
+
+    :param pt_id: The point id.
+    :return: The neighbour ids.
+    """
+    """
+    Extract the topological neighbors for point pId. In two steps:
+    1) source.GetPointCells(pt_id, cell_ids)
+    2) source.GetCellPoints(cell_id, cell_point_ids) for all cell_id in cell_ids
+    """
+    cell_ids = vtkIdList()
+    source.GetPointCells(pt_id, cell_ids)
+    neighbour = set()
+    for cell_idx in range(0, cell_ids.GetNumberOfIds()):
+        cell_id = cell_ids.GetId(cell_idx)
+        cell_point_ids = vtkIdList()
+        source.GetCellPoints(cell_id, cell_point_ids)
+        for cell_pt_idx in range(0, cell_point_ids.GetNumberOfIds()):
+            neighbour.add(cell_point_ids.GetId(cell_pt_idx))
+    return neighbour
+
+
+def compute_distance(source: vtkPolyData, pt_id_a, pt_id_b):
+    """
+    Compute the distance between two points given their ids.
+
+    :param pt_id_a:
+    :param pt_id_b:
+    :return:
+    """
+    pt_a = np.array(source.GetPoint(pt_id_a))
+    pt_b = np.array(source.GetPoint(pt_id_b))
+    return np.linalg.norm(pt_a - pt_b)
+
+
+def get_scalars(poly: vtkPolyData, point_id):
+    if type(point_id) is int:
+        return vtk_to_numpy(poly.GetPointData().GetScalars())[point_id]
+    elif hasattr(point_id, '__iter__'):
+        return [vtk_to_numpy(poly.GetPointData().GetScalars())[p] for p in point_id]
+    else:
+        return RuntimeError
+
+
+def minimize_local_scalar(source: vtkPolyData, initial_point_id, search_breadth, search_radius):
+    """
+    Minimize local point scalar values by evaluating median values within a small radius. Control the size of the local
+    search area with the 'search_breadth' and 'search_radius' parameters, which control how a local neighbourhood of
+    points is computed.
+    Args:
+        source:
+        initial_point_id:
+        search_breadth:
+        search_radius:
+
+    Returns:
+
+    """
+    # initialize
+    min_point_id = initial_point_id
+    min_n_hood = get_neighbourhood(source, min_point_id, breadth=search_breadth, max_dist=search_radius)
+    min_scalars = get_scalars(source, min_n_hood)
+    min_median = statistics.median(min_scalars)
+
+
+    still_optimizing = True
+    i = 1
+    print("Minimizing surface curvature:")
+    print('Iteration ' + str(i) + ': ' + str(min_median))
+    while still_optimizing is True:
+        initial_loop_median = min_median  # store for comparison later
+
+        # search for lowest median scalars in local neighbourhood
+        for point_id in min_n_hood:
+            local_n_hood = get_neighbourhood(source, point_id, breadth=search_breadth, max_dist=search_radius)
+            local_scalars = get_scalars(source, local_n_hood)
+            local_median = statistics.median(local_scalars)
+            if local_median < min_median:
+                min_point_id = point_id
+                min_median = local_median
+
+        if min_median < initial_loop_median:
+            min_n_hood = get_neighbourhood(source, min_point_id, breadth=search_breadth, max_dist=search_radius)
+            still_optimizing = True
+            print('Iteration ' + str(i) + ': ' + str(min_median))
+        else:
+            still_optimizing = False
+
+        i += 1
+    return min_point_id
+
