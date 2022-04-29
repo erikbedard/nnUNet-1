@@ -48,11 +48,11 @@ def main():
     d1 = np.linalg.norm(p1 - midpoint_near_glenoid, 2)
     d2 = np.linalg.norm(p2 - midpoint_near_glenoid, 2)
     if d1 < d2:
-        acromion_angle = p1
+        lateral_acromion = p1
         inferior_angle = p2
         point_on_glenoid = intersect_pts[-3]  # -1 is coincident, -2 is acromion surface, -3 is glenoid
     else:
-        acromion_angle = p2
+        lateral_acromion = p2
         inferior_angle = p1
         point_on_glenoid = intersect_pts[2]  # 0 is coincident, 1 is acromion surface, 2 is glenoid
 
@@ -61,27 +61,50 @@ def main():
     max_dist = 10
     mesh_curves = myvtk.calc_curvature(scapula_mesh, method='mean')
     _, _, seed_point_id = myvtk.find_closest_point(scapula_mesh, point_on_glenoid)
-    min_point_id = myvtk.minimize_local_scalar(mesh_curves, seed_point_id, breadth, max_dist)
-    glenoid_centre_point = mesh_curves.GetPoint(min_point_id)
+    #glenoid_seed_point_id = myvtk.minimize_local_scalar(mesh_curves, seed_point_id, breadth, max_dist)
+
+    glenoid_seed_point_id = 14613
+    #glenoid_seed_point = (179.4322052001953, 118.59009552001953, 116.80271911621094)
+    glenoid_mesh_ids = myvtk.grow_mesh(mesh_curves, glenoid_seed_point_id, threshold=0.1, min_growth_rate=0.1)
 
 
+    def render_mesh_growing(scapula_mesh, seed_point_id, mesh_ids):
+        o, n = myvtk.compute_best_fit_plane(scapula_mesh, mesh_ids)
+
+        renderer = vtkRenderer()
+        camera = renderer.GetActiveCamera()
+        camera.SetFocalPoint(scapula_mesh.GetPoint(seed_point_id))
+
+        myvtk.plt_polydata(renderer, scapula_mesh, color='cornsilk')
+        for p in mesh_ids:
+            myvtk.plt_point(renderer, scapula_mesh.GetPoint(p), radius=0.25, color='black')
+        myvtk.plt_point(renderer, scapula_mesh.GetPoint(seed_point_id), radius=0.25, color='red')
+        myvtk.plt_point(renderer, o, radius=0.25, color='green')
+        myvtk.plt_line(renderer, o, o + (n * 5))
+        myvtk.show_scene(renderer)
+
+    render_mesh_growing(scapula_mesh, seed_point_id, glenoid_mesh_ids)
+
+
+    def render_geometry(scapula_mesh,inferior_angle,lateral_acromion,midpoint_near_glenoid):
+        renderer = vtkRenderer()
+        camera = renderer.GetActiveCamera()
+        camera.SetFocalPoint(point_on_glenoid)
+
+        myvtk.plt_polydata(renderer, scapula_mesh, color='cornsilk')
+        myvtk.plt_point(renderer, inferior_angle, radius=1, color='black')
+        myvtk.plt_point(renderer, lateral_acromion, radius=1, color='black')
+        myvtk.plt_point(renderer, midpoint_near_glenoid, radius=1, color='black')
+        myvtk.plt_point(renderer, point_on_glenoid, radius=1, color='blue')
+
+        myvtk.plt_line(renderer, p1, p2, color='red')
+        myvtk.show_scene(renderer)
+
+    render_geometry(scapula_mesh, inferior_angle, lateral_acromion, midpoint_near_glenoid)
 
     filename = os.path.basename(filepath).split('.')[0]
     save_path = r"C:\erik" + os.path.sep + filename + ".stl"
     myvtk.save_stl(save_path, scapula_mesh)
-
-    renderer = vtkRenderer()
-    camera = renderer.GetActiveCamera()
-    camera.SetFocalPoint(glenoid_centre_point)
-
-    myvtk.plt_polydata(renderer, scapula_mesh, color='cornsilk')
-    myvtk.plt_point(renderer, midpoint_near_glenoid, radius=1, color='black')
-    myvtk.plt_point(renderer, point_on_glenoid, radius=1, color='blue')
-    myvtk.plt_point(renderer, glenoid_centre_point, radius=1, color='red')
-    myvtk.plt_point(renderer, acromion_angle, radius=1, color='black')
-    myvtk.plt_point(renderer, inferior_angle, radius=1, color='black')
-    myvtk.plt_line(renderer, p1, p2, color='red')
-    myvtk.show_scene(renderer)
 
 
 def find_farthest_points(points):

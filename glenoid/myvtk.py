@@ -652,12 +652,12 @@ def minimize_local_scalar(source: vtkPolyData, initial_point_id, search_breadth,
     min_scalars = get_scalars(source, min_n_hood)
     min_median = statistics.median(min_scalars)
 
-
     still_optimizing = True
-    i = 1
+    i = 0
     print("Minimizing surface curvature:")
     print('Iteration ' + str(i) + ': ' + str(min_median))
     while still_optimizing is True:
+        i += 1
         initial_loop_median = min_median  # store for comparison later
 
         # search for lowest median scalars in local neighbourhood
@@ -672,10 +672,153 @@ def minimize_local_scalar(source: vtkPolyData, initial_point_id, search_breadth,
         if min_median < initial_loop_median:
             min_n_hood = get_neighbourhood(source, min_point_id, breadth=search_breadth, max_dist=search_radius)
             still_optimizing = True
-            print('Iteration ' + str(i) + ': ' + str(min_median))
         else:
             still_optimizing = False
 
-        i += 1
+        print('Iteration ' + str(i) + ': ' + str(min_median))
+    print('Done.')
     return min_point_id
 
+
+def grow_mesh(source: vtkPolyData, seed_point_id, threshold=0.1, min_growth_rate=0.1):
+
+    # initialize
+    mesh_ids = set()
+    mesh_ids.add(seed_point_id)
+
+    while True:
+        candidate_points = get_set_neighbours(source, mesh_ids)
+        # outliers = get_outliers(source, candidate_points, threshold)
+        # if outliers is not None:
+        #     modify_outlier_scalar(source, outliers)
+
+        # grow mesh
+        eligible_points = set()
+        for p in candidate_points:
+            scalar = get_scalars(source, p)
+            if scalar < threshold:
+                eligible_points.add(p)
+            else:  # check if median value is within threshold
+                n_hood = get_neighbourhood(source, p, breadth=2)
+                n_hood.remove(p)  # strictly keep neighbours only
+                scalars = get_scalars(source, n_hood)
+                median = statistics.median(scalars)
+                if median < threshold:
+                    eligible_points.add(p)
+
+        # ensure that eligible points have at least 2 neighbours in the original point_set (prevents run-away cases)
+        if len(mesh_ids) > 1:
+            min_num_neighbours = 2
+            eligible_points_copy = copy.deepcopy(eligible_points)
+            for p in eligible_points_copy:
+                count = 0
+                n_hood = get_neighbourhood(source, p)
+                for pp in n_hood:
+                    if pp in mesh_ids:
+                        count += 1
+                if count < min_num_neighbours and p in eligible_points:
+                    eligible_points.remove(p)
+
+        num_candidates = len(candidate_points)
+        num_eligible = len(eligible_points)
+        print(num_candidates)
+        print(num_eligible)
+        growth_rate = num_eligible / num_candidates
+        print(growth_rate)
+        if growth_rate < min_growth_rate:
+            break
+        else:
+            for p in eligible_points:
+                mesh_ids.add(p)
+
+    return mesh_ids
+
+def compute_best_fit_plane(source: vtkPolyData, point_ids):
+    all_points = source.GetPoints()
+
+    # create vtk id list from point ids
+    ids = vtkIdList()
+    for p in point_ids:
+        ids.InsertNextId(p)
+
+    # create vtk points from vtk id list
+    plane_vtk_points = vtkPoints()
+    all_points.GetPoints(ids, plane_vtk_points)
+
+    origin = [0, 0, 0]
+    normal = [0, 0, 1]
+    plane = vtkPlane()
+    plane.ComputeBestFittingPlane(plane_vtk_points, origin, normal)
+    plane.SetNormal(normal[0], normal[1], normal[2])
+    plane.SetOrigin(origin[0], origin[1], origin[2])
+
+    origin = np.asarray(origin)
+    normal = np.asarray(normal)
+
+    return origin, normal
+
+
+# def get_outliers(source: vtkPolyData, point_set, threshold):
+#     """
+#     Go through items in point_set and determine which points have scalar values > threshold (i.e. are outliers)
+#     """
+#     outliers = set()
+#     for p in point_set:
+#         scalar = get_scalars(source, p)
+#         if scalar >= threshold:
+#             outliers.add(p)
+#
+#     if len(outliers) is 0:
+#         return None
+#     else:
+#         return outliers
+
+
+def get_set_neighbours(source: vtkPolyData, point_set):
+    """
+    Extract a set of points which are neighbours to any of the points in point_set
+    Args:
+        source:
+        point_set:
+
+    Returns:
+
+    """
+    neighbours_set = copy.deepcopy(point_set)
+
+    # dilate
+    for p in point_set:
+        n_hood = get_neighbourhood(source, p)
+        for pp in n_hood:
+            neighbours_set.add(pp)
+
+    # remove original set points to extract new points only
+    for p in point_set:
+        neighbours_set.remove(p)
+
+    return neighbours_set
+
+
+# def modify_outlier_scalar(source: vtkPolyData, candidate_points):
+#     new_values = []
+#     for p in candidate_points:
+#         # get median of neighbour scalars
+#         n_hood = get_neighbourhood(source, p)
+#         n_hood.remove(p)  # strictly keep neighbours only
+#         scalars = get_scalars(source, n_hood)
+#         median = statistics.median(scalars)
+#
+#         # we want to avoid modifying values before all median calcs are done because we don't want to use a modified
+#         # value in the median of other points
+#         # so, store in list for now
+#         new_values.append(median)
+#
+#     for p_id, value in zip(candidate_points, new_values):
+#         modify_scalar(source, p_id, value)
+
+
+def modify_scalar(source: vtkPolyData, point_id, new_value):
+    scalars_np = vtk_to_numpy(source.GetPointData().GetScalars())
+    scalars_np[point_id] = new_value
+    scalars_vtk = numpy_to_vtk(scalars_np)
+    source.GetPointData().SetScalars(scalars_vtk)
