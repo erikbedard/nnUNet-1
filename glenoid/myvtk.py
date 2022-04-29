@@ -266,7 +266,7 @@ def read_stl(filepath):
     return mesh
 
 
-def save_stl(save_path, poly: vtkPolyData):
+def save_stl(poly: vtkPolyData, save_path):
     """
     Save triangulation data to file.
     Args:
@@ -276,6 +276,19 @@ def save_stl(save_path, poly: vtkPolyData):
     writer = vtkSTLWriter()
     writer.SetInputData(poly)
     writer.SetFileTypeToBinary()
+    writer.SetFileName(save_path)
+    writer.Write()
+
+
+def save_nifti(image: vtkImageData, save_path):
+    """
+    Save imagedata data to file.
+    Args:
+        save_path: directory where file will be saved (be sure to include the nii.gz extension)
+        poly: vtkPolyData object with triangulation data to be saved
+    """
+    writer = vtkNIFTIImageWriter()
+    writer.SetInputData(image)
     writer.SetFileName(save_path)
     writer.Write()
 
@@ -551,10 +564,10 @@ def get_neighbourhood(source: vtkPolyData, pt_id, breadth=1, max_dist=None):
 
     Restrict the neighbourhood to be within a specified distance using max_dist.
     To select all points within max_dist radius of pt_id, breadth should be sufficiently high to ensure that a
-    sufficient number of neighbours are intially found.
+    sufficient number of neighbours are initially found.
     max_dist and breadth correlate, and should both be increased/decreased proportionally for best results. The exact
-    values to be chosen depend on the specific triangulation pattern and the average edge length. Longer edges mean that
-    a smaller breadth is needed before sufficient points are found within max_dist.
+    values to be chosen depends on the specific triangulation pattern and the average edge length. Longer edges mean
+    that a smaller breadth is needed before sufficient points are found within max_dist.
 
     Args:
         pt_id: The point id
@@ -564,7 +577,6 @@ def get_neighbourhood(source: vtkPolyData, pt_id, breadth=1, max_dist=None):
 
     Returns:
         set of all neighbouring point IDs
-
     """
 
     n_hood = _get_neighbourhood(source, pt_id)
@@ -573,7 +585,6 @@ def get_neighbourhood(source: vtkPolyData, pt_id, breadth=1, max_dist=None):
         for point_id in n_hood_copy:
             local_n_hood = _get_neighbourhood(source, point_id)
             n_hood.update(local_n_hood)
-
 
     # filter out points which are too far
     if max_dist is not None:
@@ -623,11 +634,13 @@ def compute_distance(source: vtkPolyData, pt_id_a, pt_id_b):
     return np.linalg.norm(pt_a - pt_b)
 
 
-def get_scalars(poly: vtkPolyData, point_id):
+def get_scalars(source, point_id=None):
     if type(point_id) is int:
-        return vtk_to_numpy(poly.GetPointData().GetScalars())[point_id]
+        return vtk_to_numpy(source.GetPointData().GetScalars())[point_id]
     elif hasattr(point_id, '__iter__'):
-        return [vtk_to_numpy(poly.GetPointData().GetScalars())[p] for p in point_id]
+        return [vtk_to_numpy(source.GetPointData().GetScalars())[p] for p in point_id]
+    elif point_id is None:
+        return vtk_to_numpy(source.GetPointData().GetScalars())
     else:
         return RuntimeError
 
@@ -733,6 +746,7 @@ def grow_mesh(source: vtkPolyData, seed_point_id, threshold=0.1, min_growth_rate
 
     return mesh_ids
 
+
 def compute_best_fit_plane(source: vtkPolyData, point_ids):
     all_points = source.GetPoints()
 
@@ -749,14 +763,37 @@ def compute_best_fit_plane(source: vtkPolyData, point_ids):
     normal = [0, 0, 1]
     plane = vtkPlane()
     plane.ComputeBestFittingPlane(plane_vtk_points, origin, normal)
-    plane.SetNormal(normal[0], normal[1], normal[2])
-    plane.SetOrigin(origin[0], origin[1], origin[2])
-
     origin = np.asarray(origin)
     normal = np.asarray(normal)
 
-    return origin, normal
+    # make sure normal points away from surface
+    surface_point, distance, _ = find_closest_point(source, origin)
+    assert(distance > 0)
+    surface_to_origin = origin-surface_point
+    dot = np.dot(surface_to_origin,normal)
+    if dot < 0:
+        normal = normal * -1
 
+    plane.SetNormal(normal[0], normal[1], normal[2])
+    plane.SetOrigin(origin[0], origin[1], origin[2])
+
+    return origin, normal, plane
+
+
+def compute_signed_distance_to_plane(plane: vtkPlane, query_point):
+    distance = plane.DistanceToPlane(query_point)
+
+    projected_point = [0, 0, 0]
+    plane.ProjectPoint(query_point, projected_point)
+
+    plane_to_point = np.asarray(query_point) - np.asarray(projected_point)
+    normal = np.asarray(plane.GetNormal())
+    dot = np.dot(plane_to_point, normal)
+
+    if dot > 0:
+        return distance
+    else:
+        return distance * -1
 
 # def get_outliers(source: vtkPolyData, point_set, threshold):
 #     """
@@ -817,8 +854,9 @@ def get_set_neighbours(source: vtkPolyData, point_set):
 #         modify_scalar(source, p_id, value)
 
 
-def modify_scalar(source: vtkPolyData, point_id, new_value):
+def set_scalar(source: vtkPolyData, point_id, new_value):
     scalars_np = vtk_to_numpy(source.GetPointData().GetScalars())
     scalars_np[point_id] = new_value
     scalars_vtk = numpy_to_vtk(scalars_np)
     source.GetPointData().SetScalars(scalars_vtk)
+
