@@ -409,6 +409,60 @@ def extract_mesh_data(triangle_mesh: vtkPolyData):
     return np.asarray(vertex_list), np.asarray(face_list)
 
 
+def surface_from_points(points, bins=256):
+    # code copied from vedo
+    """Surface reconstruction from a scattered cloud of points.
+    :param int bins: number of voxels in x, y and z.
+    .. hint:: |recosurface| |recosurface.py|_
+    """
+    N = len(points)
+    if N < 50:
+        print("recoSurface: Use at least 50 points.")
+        # return None
+    points = np.array(points)
+
+    ptsSource = vtkPointSource()
+    ptsSource.SetNumberOfPoints(N)
+    ptsSource.Update()
+    vpts = ptsSource.GetOutput().GetPoints()
+    for i, p in enumerate(points):
+        vpts.SetPoint(i, p)
+    polyData = ptsSource.GetOutput()
+
+    distance = vtkSignedDistance()
+    f = 0.1
+    x0, x1, y0, y1, z0, z1 = polyData.GetBounds()
+    distance.SetBounds(x0-(x1-x0)*f, x1+(x1-x0)*f,
+                       y0-(y1-y0)*f, y1+(y1-y0)*f,
+                       z0-(z1-z0)*f, z1+(z1-z0)*f)
+    if polyData.GetPointData().GetNormals():
+        distance.SetInputData(polyData)
+    else:
+        normals = vtkPCANormalEstimation()
+        normals.SetInputData(polyData)
+        normals.SetSampleSize(int(N / 50))
+        normals.SetNormalOrientationToGraphTraversal()
+        distance.SetInputConnection(normals.GetOutputPort())
+        print("Recalculating normals for", N, "Points, sample size=", int(N / 50))
+
+    b = polyData.GetBounds()
+    diagsize = np.sqrt((b[1] - b[0]) ** 2 + (b[3] - b[2]) ** 2 + (b[5] - b[4]) ** 2)
+    radius = diagsize / bins * 5
+    distance.SetRadius(radius)
+    distance.SetDimensions(bins, bins, bins)
+    distance.Update()
+
+    print("Calculating mesh from points with R =", radius)
+    surface = vtkExtractSurface()
+    surface.SetRadius(radius * 0.99)
+    surface.HoleFillingOn()
+    surface.ComputeNormalsOff()
+    surface.ComputeGradientsOff()
+    surface.SetInputConnection(distance.GetOutputPort())
+    surface.Update()
+
+    return surface.GetOutput()
+
 def find_closest_point(poly: vtkPolyData, point):
     """
     Find point on polydata that is closest to the query point.
@@ -445,6 +499,7 @@ def clean_polydata(poly: vtkPolyData):
 
 
 def create_pointcloud_polydata(points, colors=None):
+
     """https://github.com/lmb-freiburg/demon
     Creates a vtkPolyData object with the point cloud from numpy arrays
 
@@ -699,6 +754,8 @@ def grow_mesh(source: vtkPolyData, seed_point_id, threshold=0.1, min_growth_rate
     mesh_ids = set()
     mesh_ids.add(seed_point_id)
 
+    iteration = 0
+    stale_iteration = 0
     while True:
         candidate_points = get_set_neighbours(source, mesh_ids)
         # outliers = get_outliers(source, candidate_points, threshold)
@@ -734,17 +791,52 @@ def grow_mesh(source: vtkPolyData, seed_point_id, threshold=0.1, min_growth_rate
 
         num_candidates = len(candidate_points)
         num_eligible = len(eligible_points)
-        print(num_candidates)
-        print(num_eligible)
         growth_rate = num_eligible / num_candidates
-        print(growth_rate)
+
+        print("Iteration " + str(iteration) + ": " + str(num_eligible) + "/" + str(num_candidates) + "=" + str(growth_rate))
+
+        # create exit condition if growth regularly falls below 1.5 times min rate
+        if growth_rate < min_growth_rate * 1.5:
+            stale_iteration += 1
+        else:
+            stale_iteration = 0
+
         if growth_rate < min_growth_rate:
+            break
+        elif stale_iteration is 3:
+            print("Growth rate is stale, exiting early.")
+            break
+        elif iteration > 50:
+            print("WARNING: Mesh growth did not converge after 50 iterations.")
             break
         else:
             for p in eligible_points:
                 mesh_ids.add(p)
 
+
+        iteration += 1
     return mesh_ids
+
+
+def grow_mesh_above_plane(source: vtkPolyData, initial_point_ids, plane, max_dist_from_origin):
+    origin = np.asarray(plane.GetOrigin())
+    final_point_ids = copy.deepcopy(initial_point_ids)
+    num_added = 1  # arbitrarily initialize loop condition
+    while num_added is not 0:
+        num_added = 0
+        set_neighbours = get_set_neighbours(source, final_point_ids)
+        for p in set_neighbours:
+            point = source.GetPoint(p)
+            dist_to_plane, _ = compute_signed_distance_to_plane(plane, point)
+            dist_to_origin = np.linalg.norm(point-origin, 2)
+
+            is_above_plane = dist_to_plane > 0
+            is_not_too_far = dist_to_origin < max_dist_from_origin
+            if is_above_plane and is_not_too_far:  # add point
+                num_added += 1
+                final_point_ids.add(p)
+
+    return final_point_ids
 
 
 def compute_best_fit_plane(source: vtkPolyData, point_ids):
@@ -781,19 +873,21 @@ def compute_best_fit_plane(source: vtkPolyData, point_ids):
 
 
 def compute_signed_distance_to_plane(plane: vtkPlane, query_point):
+    # TODO: this was used a lot for only projecting points. Refactor and create a project-only function
     distance = plane.DistanceToPlane(query_point)
+    query_point = np.asarray(query_point)
 
     projected_point = [0, 0, 0]
     plane.ProjectPoint(query_point, projected_point)
+    projected_point = np.asarray(projected_point)
 
-    plane_to_point = np.asarray(query_point) - np.asarray(projected_point)
+    plane_to_point = query_point - projected_point
     normal = np.asarray(plane.GetNormal())
     dot = np.dot(plane_to_point, normal)
 
-    if dot > 0:
-        return distance
-    else:
-        return distance * -1
+    if dot < 0:
+        distance *= -1
+    return distance, projected_point
 
 # def get_outliers(source: vtkPolyData, point_set, threshold):
 #     """
@@ -809,6 +903,54 @@ def compute_signed_distance_to_plane(plane: vtkPlane, query_point):
 #         return None
 #     else:
 #         return outliers
+
+
+def points_to_polydata(xyz):
+    points = vtkPoints()
+    # Create the topology of the point (a vertex)
+    vertices = vtkCellArray()
+    # Add points
+    for i in range(len(xyz)):
+        p = xyz[i]
+        point_id = points.InsertNextPoint(p)
+        vertices.InsertNextCell(1)
+        vertices.InsertCellPoint(point_id)
+    # Create a poly data object
+    polydata = vtkPolyData()
+    # Set the points and vertices we created as the geometry and topology of the polydata
+    polydata.SetPoints(points)
+    polydata.SetVerts(vertices)
+    polydata.Modified()
+
+    return polydata
+
+
+def convex_hull(apoly, alphaConstant=0):
+    """
+    Create a 3D Delaunay triangulation of input points.
+    :param actor_or_list: can be either an ``Actor`` or a list of 3D points.
+    :param float alphaConstant: For a non-zero alpha value, only verts, edges, faces,
+        or tetra contained within the circumsphere (of radius alpha) will be output.
+        Otherwise, only tetrahedra will be output.
+    .. hint:: |convexHull| |convexHull.py|_
+    """
+
+    triangleFilter = vtkTriangleFilter()
+    triangleFilter.SetInputData(apoly)
+    triangleFilter.Update()
+    poly = triangleFilter.GetOutput()
+
+    delaunay = vtkDelaunay3D()  # Create the convex hull of the pointcloud
+    if alphaConstant:
+        delaunay.SetAlpha(alphaConstant)
+    delaunay.SetInputData(poly)
+    delaunay.Update()
+
+    surfaceFilter = vtkDataSetSurfaceFilter()
+    surfaceFilter.SetInputConnection(delaunay.GetOutputPort())
+    surfaceFilter.Update()
+
+    return surfaceFilter.GetOutput()
 
 
 def get_set_neighbours(source: vtkPolyData, point_set):
