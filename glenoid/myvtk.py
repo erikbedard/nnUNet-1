@@ -12,6 +12,9 @@ import statistics
 
 
 def get_rgba(color, a=1):
+    if len(color) is 4:
+        a = color[3]
+
     rgb = get_rgb(color)
     rgba = rgb.copy()
     rgba.append(a)
@@ -29,7 +32,7 @@ def get_rgb(color):
         colors = vtkNamedColors()
         rgb = list(colors.GetColor3d(color))
     else:
-        rgb = list(color)
+        rgb = list(color)[0:3]
     return rgb
 
 
@@ -107,6 +110,7 @@ def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato'):
     actor = vtkActor()
     actor.SetMapper(mapper)
     actor.GetProperty().SetColor(rgb)
+    actor.GetProperty().SetOpacity(rgba[3])
 
     renderer.AddActor(actor)
 
@@ -377,6 +381,24 @@ def convert_voxels_to_poly(binary_mask: vtkImageData, method='flying_edges'):
     return poly
 
 
+def get_points(source: vtkPolyData, point_ids=None):
+    if point_ids is None:
+        point_ids = np.arange(0, source.GetNumberOfPoints())
+
+    points = []
+    for p in point_ids:
+        points.append(source.GetPoint(p))
+
+    return np.asarray(points)
+
+
+def subdivide_mesh(source: vtkPolyData):
+    filter = vtkButterflySubdivisionFilter()
+    filter.SetInputData(source)
+    filter.Update()
+    return filter.GetOutput()
+
+
 def extract_mesh_data(triangle_mesh: vtkPolyData):
     """
     Args:
@@ -399,14 +421,9 @@ def extract_mesh_data(triangle_mesh: vtkPolyData):
         face_list.append(vert_id_list)
 
     # process vertices
-    points = triangle_mesh.GetPoints()
-    num_vertices = points.GetNumberOfPoints()
-    vertex_list = []
-    for i in range(0, num_vertices):
-        point = points.GetPoint(i)
-        vertex_list.append(point)
+    points = get_points(triangle_mesh)
 
-    return np.asarray(vertex_list), np.asarray(face_list)
+    return np.asarray(points), np.asarray(face_list)
 
 
 def surface_from_points(points, bins=256):
@@ -462,6 +479,97 @@ def surface_from_points(points, bins=256):
     surface.Update()
 
     return surface.GetOutput()
+
+
+def create_blank_image_from_source(source: vtkImageData, value=1):
+    spacing = source.GetSpacing()
+    dim = source.GetDimensions()
+    origin = source.GetOrigin()
+
+    image = vtkImageData()
+    image.SetSpacing(spacing)
+    image.SetDimensions(dim)
+    image.SetExtent(0, dim[0] - 1, 0, dim[1] - 1, 0, dim[2] - 1)
+    image.SetOrigin(origin)
+    image.AllocateScalars(VTK_UNSIGNED_CHAR, 0)
+
+    set_scalars(image, value)
+
+    return image
+
+
+def polydata_to_imagedata(polydata, image_template: vtkImageData=None, dimensions=(100, 100, 100), padding=1):
+    # based on https://github.com/tfmoraes/polydata_to_imagedata/blob/main/polydata_to_imagedata.py
+    inval = 1
+    outval = 0
+    if image_template is None:
+        xi, xf, yi, yf, zi, zf = polydata.GetBounds()
+        dx, dy, dz = dimensions
+
+        # Calculating spacing
+        sx = (xf - xi) / dx
+        sy = (yf - yi) / dy
+        sz = (zf - zi) / dz
+        spacing = (sx,sy,sz)
+
+        # Calculating Origin
+        ox = xi + sx / 2.0
+        oy = yi + sy / 2.0
+        oz = zi + sz / 2.0
+        origin = (ox,oy,oz)
+
+        if padding:
+            ox -= sx
+            oy -= sy
+            oz -= sz
+
+            dx += 2 * padding
+            dy += 2 * padding
+            dz += 2 * padding
+            dim = (dx,dy,dz)
+
+        image_template = vtkImageData()
+        image_template.SetSpacing(spacing)
+        image_template.SetDimensions(dim)
+        image_template.SetExtent(0, dim[0] - 1, 0, dim[1] - 1, 0, dim[2] - 1)
+        image_template.SetOrigin(origin)
+        image_template.AllocateScalars(VTK_UNSIGNED_CHAR, 0)
+
+    origin = image_template.GetOrigin()
+    spacing = image_template.GetSpacing()
+
+    image = image_template
+
+
+    # for i in range(image.GetNumberOfPoints()):
+    #     image.GetPointData().GetScalars().SetTuple1(i, inval)
+
+    pol2stenc = vtkPolyDataToImageStencil()
+    pol2stenc.SetInputData(polydata)
+    pol2stenc.SetOutputOrigin(origin)
+    pol2stenc.SetOutputSpacing(spacing)
+    pol2stenc.SetOutputWholeExtent(image.GetExtent())
+    pol2stenc.Update()
+
+    imgstenc = vtkImageStencil()
+    imgstenc.SetInputData(image)
+    imgstenc.SetStencilConnection(pol2stenc.GetOutputPort())
+    imgstenc.ReverseStencilOff()
+    imgstenc.SetBackgroundValue(outval)
+    imgstenc.Update()
+
+    return imgstenc.GetOutput()
+
+def extract_image_geometry_from_mesh(image: vtkImageData, mesh: vtkPolyData):
+    implicit = vtkImplicitPolyDataDistance()
+    implicit.SetInput(mesh)
+
+    extract = vtkExtractGeometry()
+    extract.SetInputData(image)
+    extract.SetImplicitFunction(implicit)
+    extract.Update()
+    return extract.GetOutput()
+
 
 def find_closest_point(poly: vtkPolyData, point):
     """
@@ -700,6 +808,57 @@ def get_scalars(source, point_id=None):
         return RuntimeError
 
 
+def compute_point_normals(source: vtkPolyData):
+    normals = vtkPolyDataNormals()
+    normals.SetInputData(source)
+    normals.SetComputePointNormals(True)
+    normals.SetComputeCellNormals(False)
+    normals.SetSplitting(False)
+    normals.Update()
+    return normals.GetOutput()
+
+
+def compute_cell_normals(source: vtkPolyData):
+    normals = vtkPolyDataNormals()
+    normals.SetInputData(source)
+    normals.SetComputePointNormals(False)
+    normals.SetComputeCellNormals(True)
+    normals.SetSplitting(False)
+    normals.Update()
+    return normals.GetOutput()
+
+
+def get_point_normals(source: vtkPolyData):
+    if source.GetPointData().GetNormals() is None:
+        source = compute_point_normals(source)
+    return vtk_to_numpy(source.GetPointData().GetNormals())
+
+
+def get_cell_normals(source: vtkPolyData):
+    if source.GetCellData().GetNormals() is None:
+        source = compute_cell_normals(source)
+    return vtk_to_numpy(source.GetCellData().GetNormals())
+
+
+def compute_furthest_projected_distance_from_plane(plane: vtkPlane, points, constraint=None):
+    valid_constraint = ['above', 'below', None]  # constrain to be above or below plane or either
+    furthest_d = 0
+    furthest_point = None
+    for point in points:
+        d, p = compute_signed_distance_to_plane(plane, point)
+        if constraint is 'above' and d > furthest_d:
+            furthest_d = d
+            furthest_point = p
+        elif constraint is 'below' and d < furthest_d:
+            furthest_d = d
+            furthest_point = p
+        elif abs(d) > abs(furthest_d):
+            furthest_d = d
+            furthest_point = p
+            
+    return furthest_d, furthest_point
+
+
 def minimize_local_scalar(source: vtkPolyData, initial_point_id, search_breadth, search_radius):
     """
     Minimize local point scalar values by evaluating median values within a small radius. Control the size of the local
@@ -839,7 +998,20 @@ def grow_mesh_above_plane(source: vtkPolyData, initial_point_ids, plane, max_dis
     return final_point_ids
 
 
-def compute_best_fit_plane(source: vtkPolyData, point_ids):
+# def clip_mesh_with_plane(source: vtkPolyData, plane: vtkPlane()):
+#     clipper = vtkClipPolyData()
+#     clipper.SetInputData(source)
+#     clipper.SetClipFunction(plane)
+#     clipper.SetValue(0)
+#     clipper.Update()
+#     return clipper.GetOutput()
+
+
+def compute_best_fit_plane(source: vtkPolyData, point_ids=None, point_away=True):
+    if point_ids is None:
+        N = source.GetNumberOfPoints()
+        point_ids = np.arange(0, N)
+
     all_points = source.GetPoints()
 
     # create vtk id list from point ids
@@ -859,12 +1031,13 @@ def compute_best_fit_plane(source: vtkPolyData, point_ids):
     normal = np.asarray(normal)
 
     # make sure normal points away from surface
-    surface_point, distance, _ = find_closest_point(source, origin)
-    assert(distance > 0)
-    surface_to_origin = origin-surface_point
-    dot = np.dot(surface_to_origin,normal)
-    if dot < 0:
-        normal = normal * -1
+    if point_away is True:
+        surface_point, distance, _ = find_closest_point(source, origin)
+        assert(distance > 0)
+        surface_to_origin = origin-surface_point
+        dot = np.dot(surface_to_origin,normal)
+        if dot < 0:
+            normal = normal * -1
 
     plane.SetNormal(normal[0], normal[1], normal[2])
     plane.SetOrigin(origin[0], origin[1], origin[2])
@@ -872,14 +1045,17 @@ def compute_best_fit_plane(source: vtkPolyData, point_ids):
     return origin, normal, plane
 
 
+def project_point_onto_plane(plane: vtkPlane, point):
+    projected_point = [0, 0, 0]  # initialize
+    plane.ProjectPoint(point, projected_point)
+    return np.asarray(projected_point)
+
+
 def compute_signed_distance_to_plane(plane: vtkPlane, query_point):
-    # TODO: this was used a lot for only projecting points. Refactor and create a project-only function
     distance = plane.DistanceToPlane(query_point)
     query_point = np.asarray(query_point)
 
-    projected_point = [0, 0, 0]
-    plane.ProjectPoint(query_point, projected_point)
-    projected_point = np.asarray(projected_point)
+    projected_point = project_point_onto_plane(plane, query_point)
 
     plane_to_point = query_point - projected_point
     normal = np.asarray(plane.GetNormal())
@@ -996,9 +1172,16 @@ def get_set_neighbours(source: vtkPolyData, point_set):
 #         modify_scalar(source, p_id, value)
 
 
-def set_scalar(source: vtkPolyData, point_id, new_value):
+def set_scalars(source: vtkPolyData, new_value, point_ids=None):
     scalars_np = vtk_to_numpy(source.GetPointData().GetScalars())
-    scalars_np[point_id] = new_value
+
+    if point_ids is None:
+        scalars_np = np.ones(scalars_np.shape) * new_value
+
+    else:
+        for p in point_ids:
+            scalars_np[p] = new_value
+
     scalars_vtk = numpy_to_vtk(scalars_np)
     source.GetPointData().SetScalars(scalars_vtk)
 

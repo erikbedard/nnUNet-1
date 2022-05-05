@@ -54,20 +54,19 @@ def process_file(filepath, glenoid_labels_save_dir, glenoid_labels_box_save_dir,
     scapula_mesh = myvtk.create_mesh_from_image_labels(labels, scapula_label_num, preserve_boundary=False)
 
     render_geometry = True
-    render_glenoid_mesh = True
+    render_glenoid_mesh = False
     render_segment = True
 
     # parameters for finding approximate glenoid centre
-    optim_breadth = 12
-    optim_max_dist = 10
+    optim_breadth = 8
+    optim_max_dist = 5
 
     # parameters for mesh-growing algorithm
     growth_threshold = 0.1
     min_growth_rate = 0.1
 
     # parameters for performing  final segmentation geometry
-    glenoid_thickness = 10
-    segment_radius_scale = 1.05
+    glenoid_thickness = 10  # mm
 
     plane_origin, plane_normal, glenoid_mesh_ids = determine_glenoid_segment_parameters(
         scapula_mesh,
@@ -76,14 +75,15 @@ def process_file(filepath, glenoid_labels_save_dir, glenoid_labels_box_save_dir,
         growth_threshold=growth_threshold,
         min_growth_rate=min_growth_rate,
         glenoid_thickness=glenoid_thickness,
-        segment_radius_scale=segment_radius_scale,
         render_geometry=render_geometry,
         render_glenoid_mesh=render_glenoid_mesh)
 
     # print("Segmenting glenoid...")
-    glenoid_mask_box = myvtk.get_mask_from_labels(labels, scapula_label_num)  # start box as scapula
-    glenoid_mask_segmented, glenoid_mask_box = extract_glenoid(glenoid_mask_box, scapula_mask, scapula_mesh, plane_origin, plane_normal, glenoid_mesh_ids, render=render_segment)
-    #
+    buffer_distance = 5  # mm
+    glenoid_mask = myvtk.create_blank_image_from_source(scapula_mask)
+    glenoid_mask = create_glenoid_mask(glenoid_mask,
+        scapula_mesh, glenoid_mesh_ids, plane_origin, plane_normal, buffer_distance=buffer_distance, render=render_segment)
+
     # print("Saving...")
     # glenoid_save_path = glenoid_labels_save_dir + os.path.sep + filename + ".nii.gz"
     # myvtk.save_nifti(glenoid_mask_segmented, glenoid_save_path)
@@ -132,7 +132,6 @@ def determine_glenoid_segment_parameters(scapula_mesh,
                                          growth_threshold=0.1,
                                          min_growth_rate=0.1,
                                          glenoid_thickness=10,
-                                         segment_radius_scale=1.2,
                                          render_geometry=False,
                                          render_glenoid_mesh=False):
 
@@ -165,14 +164,30 @@ def get_initial_glenoid_point(scapula_mesh, initialize='plane', render=False):
     # goal is to find a seed point on the glenoid
 
     # find acromion angle (AA) and inferior angle (IA) points by getting furthest two points in the mesh
-    scapula_vertices, _ = myvtk.extract_mesh_data(scapula_mesh)
-    p1, p2 = find_farthest_points(scapula_vertices)
+    scapula_points = myvtk.get_points(scapula_mesh)
+    p1, p2 = find_farthest_points(scapula_points)
     scapula_diameter = np.linalg.norm(p2 - p1, 2)
 
     if initialize is 'plane':
-        N = scapula_mesh.GetNumberOfPoints()
-        ids = np.arange(0, N-1)
-        _, _, scapula_plane = myvtk.compute_best_fit_plane(scapula_mesh, ids)
+
+        # get initial plane
+        _, _, scapula_plane = myvtk.compute_best_fit_plane(scapula_mesh)
+
+        # # extract points within a percentile of distance from plane
+        # N = scapula_mesh.GetNumberOfPoints()
+        # distances = np.zeros(N)
+        # for i in range(N):
+        #     point = scapula_mesh.GetPoint(i)
+        #     d, _ = myvtk.compute_signed_distance_to_plane(scapula_plane, point)
+        #     distances[i] = abs(d)
+        #
+        # percentile = np.percentile(distances, 90)
+        # close_points_ind = np.where(distances < percentile)[0]
+        # points = myvtk.get_points(scapula_mesh, close_points_ind)
+        #
+        # poly = myvtk.points_to_polydata(points)
+        # _, _, scapula_plane = myvtk.compute_best_fit_plane(poly,point_away=False)
+
 
         distance1, p1 = myvtk.compute_signed_distance_to_plane(scapula_plane, p1)
         distance2, p2 = myvtk.compute_signed_distance_to_plane(scapula_plane, p2)
@@ -311,137 +326,67 @@ def compute_glenoid_plane(scapula_mesh,
 
     return glenoid_plane, glenoid_mesh_ids
 
-from vtkmodules.all import *
-from vtk.util.numpy_support import *
-def extract_glenoid(glenoid_mask_box, scapula_mask, scapula_mesh, origin, normal, glenoid_mesh_ids, render=False):
 
-    plane = myvtk.vtkPlane()
-    plane.SetOrigin(origin[0], origin[1], origin[2])
-    plane.SetNormal(normal[0], normal[1], normal[2])
+def create_glenoid_mask(blank_mask, scapula_mesh, glenoid_mesh_ids, origin, normal, buffer_distance=5, render=False):
 
-    # create a 3D convex hull from glenoid surface points and their projections onto the segment plane
-    glenoid_shape_points = []
+    segment_plane = myvtk.vtkPlane()
+    segment_plane.SetOrigin(origin[0], origin[1], origin[2])
+    segment_plane.SetNormal(normal[0], normal[1], normal[2])
+
+    # create second plane above all glenoid points
+    mesh_points = myvtk.get_points(scapula_mesh, glenoid_mesh_ids)
+    d_above, _ = myvtk.compute_furthest_projected_distance_from_plane(segment_plane, mesh_points, constraint='above')
+
+    plane_above = myvtk.vtkPlane()
+    origin_above = origin + (d_above + buffer_distance) * normal
+    plane_above.SetOrigin(origin_above[0], origin_above[1], origin_above[2])
+    plane_above.SetNormal(normal[0], normal[1], normal[2])
+
+    # create a 3D convex hull from glenoid surface point projections onto the two planes
+    glenoid_shape_points_list = []
     for p in glenoid_mesh_ids:
         point = scapula_mesh.GetPoint(p)
-        _, projected_point = myvtk.compute_signed_distance_to_plane(plane, point)
-        glenoid_shape_points.append(point)
-        glenoid_shape_points.append(projected_point)
+        glenoid_shape_points_list.append(myvtk.project_point_onto_plane(segment_plane, point))
+        glenoid_shape_points_list.append(myvtk.project_point_onto_plane(plane_above, point))
 
-    glenoid_shape_points = np.asarray(glenoid_shape_points)
+    glenoid_shape_points = np.asarray(glenoid_shape_points_list)
     poly = myvtk.points_to_polydata(glenoid_shape_points)
     hull = myvtk.convex_hull(poly)
 
+    # subdivide to ensure there are points along sides of hull
+    # for which normals can be computed pointing outward parallel to planes
+    hull = myvtk.subdivide_mesh(hull)
 
-    normals = vtkPolyDataNormals()
-    normals.SetInputData(hull)
-    normals.SetComputePointNormals(True)
-    normals.Update()
-    hull = normals.GetOutput()
-    normals = vtk_to_numpy(hull.GetPointData().GetNormals())
-    vtk_pts = hull.GetPoints()
-    for i in range(hull.GetNumberOfPoints()):
-        old_point = vtk_pts.GetPoint(i)
-        point_normal = normals[i]
-        new_point = old_point + 5 * point_normal
+    # extend points outward by a buffer distance and recompute hull
+    normals = myvtk.get_point_normals(hull)
+    points = myvtk.get_points(hull)
+    for i in range(len(points)):
+        new_point = points[i] + buffer_distance * normals[i]
+        glenoid_shape_points_list.append(myvtk.project_point_onto_plane(segment_plane, new_point))
+        glenoid_shape_points_list.append(myvtk.project_point_onto_plane(plane_above, new_point))
 
-        # any new points below the plane should have direction changed along the plane
-        # is_pointing_down = np.all(np.isclose(-point_normal, normal))
-        # d_to_plane, projected_point = myvtk.compute_signed_distance_to_plane(plane, new_point)
-        # if d_to_plane < 0.0001 and not is_pointing_down:
-        #     point_normal = projected_point - old_point
-        #     point_normal /= np.linalg.norm(point_normal, 2)
+    glenoid_shape_points = np.asarray(glenoid_shape_points_list)
+    poly2 = myvtk.points_to_polydata(glenoid_shape_points)
+    glenoid_hull = myvtk.convex_hull(poly2)
 
-        # new_point = old_point + 5 * point_normal
+    # glenoid_mask = myvtk.extract_image_geometry_from_mesh(blank_mask, hull2)
+    glenoid_mask = myvtk.polydata_to_imagedata(glenoid_hull, image_template=blank_mask)
 
-        vtk_pts.SetPoint(i, new_point)
-
-    hull2 = myvtk.convex_hull(hull)
-    implicit_function = vtkImplicitPolyDataDistance()
-    implicit_function.SetInput(hull2)
-
-    dilate_erode = vtkImageDilateErode3D()
-    dilate_erode.SetInputData(glenoid_mask_box)
-    dilate_erode.SetDilateValue(1)
-    dilate_erode.SetErodeValue(0)
-    dilate_erode.SetKernelSize(20, 20, 20)
-    dilate_erode.ReleaseDataFlagOff()
-    dilate_erode.Update()
-
-    glenoid_mask_box = dilate_erode.GetOutput()
-    scalars = myvtk.get_scalars(glenoid_mask_box)
-    scapula_ind = np.argwhere(scalars)
-    for i in scapula_ind:
-        point = np.asarray(glenoid_mask_box.GetPoint(i))
-        if implicit_function.FunctionValue(point) <= 0:  # inside hull
-            d_to_plane, _ = myvtk.compute_signed_distance_to_plane(plane, point)
-
-            # must be on right side of plane
-            if d_to_plane > 0:
-                continue
-
-        # point is in hull and above plane. Hooray! it's the glenoid, set it to foreground
-        myvtk.set_scalar(glenoid_mask_box, i, 0)
-
-    # outside hull
-
-
-
-    hull2_vertices, _ = myvtk.extract_mesh_data(hull2)
-    p1, p2 = find_farthest_points(hull2_vertices)
-    glenoid_diameter = np.linalg.norm(p2 - p1, 2)
-
-    # loop through all scapula pixels and determine which are part of glenoid
-    scalars = myvtk.get_scalars(scapula_mask)
-    scapula_ind = np.argwhere(scalars)
-    background = 0
-    for i in scapula_ind:
-        point = np.asarray(scapula_mask.GetPoint(i))
-        d_to_plane, projected_point = myvtk.compute_signed_distance_to_plane(plane, point)
-
-        # must be on right side of plane
-        wrong_side_of_plane = d_to_plane < 0
-
-        # must be not be too far above plane
-        max_dist_above_plane = 20
-        too_far_from_plane = d_to_plane > max_dist_above_plane
-
-        # must not be too far from hull
-        d_to_origin = np.linalg.norm(origin - point, 2)
-        too_far_from_origin = d_to_origin > glenoid_diameter / 1.9
-
-        is_glenoid = False
-        if wrong_side_of_plane or too_far_from_plane or too_far_from_origin:
-            myvtk.set_scalar(scapula_mask, i, background)  # point is not glenoid
-            continue
-        else:
-            # projected point must be inside the convex hull
-            # max_dist_to_hull = 5
-            # closest_point, d_to_hull, _ = myvtk.find_closest_point(hull, point)
-            # too_far_from_hull = d_to_hull > max_dist_to_hull
-
-            if implicit_function.FunctionValue(point) <= 0:
-                # inside hull
-                pass
-            else:
-                # outside hull
-                myvtk.set_scalar(scapula_mask, i, background)  # point is not glenoid
-
-    glenoid_mask_segmented = scapula_mask
-
-    def render_glenoid(glenoid_mask_segmented, segment_origin):
-        foreground = 1
-        glenoid_mesh = myvtk.create_mesh_from_image_labels(glenoid_mask_segmented, foreground, preserve_boundary=True)
+    def render_glenoid_hull(scapula_mesh, glenoid_hull, segment_origin):
+        #foreground = 1
+        #glenoid_mesh = myvtk.create_mesh_from_image_labels(glenoid_mask, foreground, preserve_boundary=True)
 
         renderer = vtkRenderer()
         camera = renderer.GetActiveCamera()
         camera.SetFocalPoint(segment_origin)
-        myvtk.plt_polydata(renderer, glenoid_mesh, color='cornsilk')
+        myvtk.plt_polydata(renderer, scapula_mesh, color='cornsilk')
+        myvtk.plt_polydata(renderer, glenoid_hull, color=(0.5,0.5,0.5,0.5))
         myvtk.show_scene(renderer)
 
     if render is True:
-        render_glenoid(glenoid_mask_segmented, origin)
+        render_glenoid_hull(scapula_mesh, glenoid_hull, origin)
 
-    return glenoid_mask_segmented, glenoid_mask_box
+    return glenoid_mask
 
 
 def find_farthest_points(points):
