@@ -12,7 +12,7 @@ import statistics
 
 
 def get_rgba(color, a=1):
-    if len(color) is 4:
+    if type(color) is not str and len(color) is 4:
         a = color[3]
 
     rgb = get_rgb(color)
@@ -84,6 +84,31 @@ def plt_line(renderer: vtkRenderer, p1, p2, color='blue'):
     renderer.AddActor(actor)
 
 
+def plt_plane(renderer: vtkRenderer, plane, pt1, pt2, color='LightBlue', opacity=0.5):
+    """
+    Add a plane to a scene.
+    Args:
+        renderer:
+        plane:
+        color:
+    """
+    plane_source = vtkPlaneSource()
+    plane_source.SetCenter(plane.GetOrigin())
+    plane_source.SetNormal(plane.GetNormal())
+    plane_source.SetPoint1(pt1)
+    plane_source.SetPoint2(pt2)
+
+    mapper = vtkPolyDataMapper()
+    mapper.SetInputConnection(plane_source.GetOutputPort())
+
+    actor = vtkActor()
+    actor.SetMapper(mapper)
+    actor.GetProperty().SetColor(get_rgb(color))
+    actor.GetProperty().SetOpacity(opacity)
+
+    renderer.AddActor(actor)
+
+
 def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato'):
     """
     Add polydata to a scene.
@@ -115,7 +140,7 @@ def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato'):
     renderer.AddActor(actor)
 
 
-def show_scene(renderer: vtkRenderer, bg_color='white', window_name='VTK', window_size=(500, 500)):
+def show_scene(renderer: vtkRenderer, bg_color='white', window_name='VTK', window_size=(500, 500), save_path=None):
     """
     Create and render a scene.
     Args:
@@ -130,14 +155,75 @@ def show_scene(renderer: vtkRenderer, bg_color='white', window_name='VTK', windo
     renWin.AddRenderer(renderer)
     renWin.SetSize(*window_size)
     renWin.SetWindowName(window_name)
+    if save_path is not None:
+        renWin.ShowWindowOff()
     renWin.Render()
 
-    iren = vtkRenderWindowInteractor()
-    style = vtkInteractorStyleTrackballCamera()
-    iren.SetInteractorStyle(style)
-    iren.SetRenderWindow(renWin)
-    iren.Initialize()
-    iren.Start()
+    if save_path is not None:
+        save_window(renWin, save_path)
+    else:
+        iren = vtkRenderWindowInteractor()
+        style = vtkInteractorStyleTrackballCamera()
+        iren.SetInteractorStyle(style)
+        iren.SetRenderWindow(renWin)
+        iren.Initialize()
+        iren.Start()
+
+
+def save_window(renWin: vtkRenderWindow, fileName, rgba=False):
+    '''
+    Write the render window view to an image file.
+
+    Image types supported are:
+     BMP, JPEG, PNM, PNG, PostScript, TIFF.
+    The default parameters are used for all writers, change as needed.
+
+    :param fileName: The file name, if no extension then PNG is assumed.
+    :param renWin: The render window.
+    :param rgba: Used to set the buffer type.
+    :return:
+    '''
+
+    import os
+
+    if fileName:
+        # Select the writer to use.
+        path, ext = os.path.splitext(fileName)
+        ext = ext.lower()
+        if not ext:
+            ext = '.png'
+            fileName = fileName + ext
+        if ext == '.bmp':
+            writer = vtkBMPWriter()
+        elif ext == '.jpg':
+            writer = vtkJPEGWriter()
+        elif ext == '.pnm':
+            writer = vtkPNMWriter()
+        elif ext == '.ps':
+            if rgba:
+                rgba = False
+            writer = vtkPostScriptWriter()
+        elif ext == '.tiff':
+            writer = vtkTIFFWriter()
+        else:
+            writer = vtkPNGWriter()
+
+        windowto_image_filter = vtkWindowToImageFilter()
+        windowto_image_filter.SetInput(renWin)
+        windowto_image_filter.SetScale(1)  # image quality
+        if rgba:
+            windowto_image_filter.SetInputBufferTypeToRGBA()
+        else:
+            windowto_image_filter.SetInputBufferTypeToRGB()
+            # Read from the front buffer.
+            windowto_image_filter.ReadFrontBufferOff()
+            windowto_image_filter.Update()
+
+        writer.SetFileName(fileName)
+        writer.SetInputConnection(windowto_image_filter.GetOutputPort())
+        writer.Write()
+    else:
+        raise RuntimeError('Need a filename.')
 
 
 def get_mask_from_labels(image: vtkImageData, label_num: int):
@@ -365,6 +451,8 @@ def convert_voxels_to_poly(binary_mask: vtkImageData, method='flying_edges'):
             surface = vtkDiscreteFlyingEdges3D()
         elif method is 'marching_cubes':
             surface = vtkDiscreteMarchingCubes()
+        else:
+            return RuntimeError
 
         surface.SetInputData(binary_mask)
         surface.GenerateValues(1, 1, 1)
@@ -377,6 +465,8 @@ def convert_voxels_to_poly(binary_mask: vtkImageData, method='flying_edges'):
     elif method is 'preserve_boundary':
         foreground_label = 1
         poly = convert_voxels_to_cube_mesh(binary_mask, foreground_label)
+    else:
+        return RuntimeError
 
     return poly
 
@@ -393,7 +483,7 @@ def get_points(source: vtkPolyData, point_ids=None):
 
 
 def subdivide_mesh(source: vtkPolyData):
-    filter = vtkButterflySubdivisionFilter()
+    filter = vtkLoopSubdivisionFilter()
     filter.SetInputData(source)
     filter.Update()
     return filter.GetOutput()
@@ -717,6 +807,15 @@ def create_mesh_from_image_labels(image_labels: vtkImageData, label_num: int, pr
     return mesh
 
 
+def apply_mask_to_image(mask: vtkImageData, image: vtkImageData):
+    image_scalars = get_scalars(image)
+    mask_scalars = get_scalars(mask)
+    assert(mask.GetScalarRange() == (0,1))
+    applied = image_scalars * mask_scalars
+    set_scalars(image, applied)
+    return image
+
+
 def get_neighbourhood(source: vtkPolyData, pt_id, breadth=1, max_dist=None):
     """
     Find the ids of the neighbours of pt_id.
@@ -840,33 +939,39 @@ def get_cell_normals(source: vtkPolyData):
     return vtk_to_numpy(source.GetCellData().GetNormals())
 
 
-def compute_furthest_projected_distance_from_plane(plane: vtkPlane, points, constraint=None):
+def compute_furthest_distance_from_plane(plane: vtkPlane, points, constraint=None):
     valid_constraint = ['above', 'below', None]  # constrain to be above or below plane or either
-    furthest_d = 0
-    furthest_point = None
-    for point in points:
-        d, p = compute_signed_distance_to_plane(plane, point)
-        if constraint is 'above' and d > furthest_d:
-            furthest_d = d
-            furthest_point = p
-        elif constraint is 'below' and d < furthest_d:
-            furthest_d = d
-            furthest_point = p
-        elif abs(d) > abs(furthest_d):
-            furthest_d = d
-            furthest_point = p
-            
-    return furthest_d, furthest_point
+
+    N = len(points)
+    d = np.zeros(N)
+
+    for i in range(N):
+        d[i], _ = compute_signed_distance_to_plane(plane, points[i])
+
+    if constraint is 'above':
+        furthest_ind = np.argmax(d)
+    elif constraint is 'below':
+        furthest_ind = np.argmin(d)
+    else:
+        furthest_ind = np.argmax(np.abs(d))
+
+    furthest_d = d[furthest_ind]
+    furthest_point = points[furthest_ind]
+
+    return furthest_d, np.asarray(furthest_point)
 
 
-def minimize_local_scalar(source: vtkPolyData, initial_point_id, search_breadth, search_radius):
+def minimize_local_scalar(source: vtkPolyData, initial_point, search_breadth, search_radius,
+                          render=False,
+                          render_camera=None,
+                          render_save_path=None):
     """
     Minimize local point scalar values by evaluating median values within a small radius. Control the size of the local
     search area with the 'search_breadth' and 'search_radius' parameters, which control how a local neighbourhood of
     points is computed.
     Args:
         source:
-        initial_point_id:
+        initial_point:
         search_breadth:
         search_radius:
 
@@ -874,7 +979,7 @@ def minimize_local_scalar(source: vtkPolyData, initial_point_id, search_breadth,
 
     """
     # initialize
-    min_point_id = initial_point_id
+    _, _, min_point_id = find_closest_point(source, initial_point)
     min_n_hood = get_neighbourhood(source, min_point_id, breadth=search_breadth, max_dist=search_radius)
     min_scalars = get_scalars(source, min_n_hood)
     min_median = statistics.median(min_scalars)
@@ -904,7 +1009,30 @@ def minimize_local_scalar(source: vtkPolyData, initial_point_id, search_breadth,
 
         print('Iteration ' + str(i) + ': ' + str(min_median))
     print('Done.')
-    return min_point_id
+
+    min_point = source.GetPoint(min_point_id)
+
+    def render_minimization():
+
+        renderer = vtkRenderer()
+        if render_camera is None:
+            camera = renderer.GetActiveCamera()
+            camera.SetFocalPoint(min_point)
+        else:
+            renderer.SetActiveCamera(render_camera)
+
+        plt_polydata(renderer, source, color='cornsilk')
+        for p in min_n_hood:
+            plt_point(renderer, source.GetPoint(p), radius=0.25, color='black')
+        plt_point(renderer, initial_point, radius=1, color='red')
+        plt_point(renderer, min_point, radius=1, color='green')
+
+        show_scene(renderer, save_path=render_save_path)
+
+    if render is True:
+        render_minimization()
+
+    return np.asarray(min_point)
 
 
 def grow_mesh(source: vtkPolyData, seed_point_id, threshold=0.1, min_growth_rate=0.1):
@@ -1033,11 +1161,10 @@ def compute_best_fit_plane(source: vtkPolyData, point_ids=None, point_away=True)
     # make sure normal points away from surface
     if point_away is True:
         surface_point, distance, _ = find_closest_point(source, origin)
-        assert(distance > 0)
         surface_to_origin = origin-surface_point
-        dot = np.dot(surface_to_origin,normal)
+        dot = np.dot(surface_to_origin, normal)
         if dot < 0:
-            normal = normal * -1
+            normal *= -1
 
     plane.SetNormal(normal[0], normal[1], normal[2])
     plane.SetOrigin(origin[0], origin[1], origin[2])
@@ -1051,19 +1178,30 @@ def project_point_onto_plane(plane: vtkPlane, point):
     return np.asarray(projected_point)
 
 
-def compute_signed_distance_to_plane(plane: vtkPlane, query_point):
-    distance = plane.DistanceToPlane(query_point)
-    query_point = np.asarray(query_point)
+def compute_signed_distance_to_plane(plane: vtkPlane, query_points):
+    if type(query_points) is tuple or len(query_points.shape) is 1:
+        N = 1
+        query_points = [query_points]
 
-    projected_point = project_point_onto_plane(plane, query_point)
+    else:
+        N = len(query_points)
 
-    plane_to_point = query_point - projected_point
+    projected_points = np.zeros((N, 3))
+    distances = np.zeros(N)
     normal = np.asarray(plane.GetNormal())
-    dot = np.dot(plane_to_point, normal)
+    for i in range(N):
+        distances[i] = plane.DistanceToPlane(query_points[i])
+        projected_points[i] = project_point_onto_plane(plane, query_points[i])
 
-    if dot < 0:
-        distance *= -1
-    return distance, projected_point
+        plane_to_point = query_points[i] - projected_points[i]
+        dot = np.dot(plane_to_point, normal)
+
+        if dot < 0:
+            distances[i] *= -1
+
+    if N is 1:
+        projected_points = projected_points[0]
+    return distances, projected_points
 
 # def get_outliers(source: vtkPolyData, point_set, threshold):
 #     """
@@ -1120,6 +1258,7 @@ def convex_hull(apoly, alphaConstant=0):
     if alphaConstant:
         delaunay.SetAlpha(alphaConstant)
     delaunay.SetInputData(poly)
+    delaunay.SetTolerance(0.01)
     delaunay.Update()
 
     surfaceFilter = vtkDataSetSurfaceFilter()
@@ -1185,3 +1324,50 @@ def set_scalars(source: vtkPolyData, new_value, point_ids=None):
     scalars_vtk = numpy_to_vtk(scalars_np)
     source.GetPointData().SetScalars(scalars_vtk)
 
+
+def distance_to_polydata(polydata: vtkPolyData, point):
+    # create tiny sphere at point location
+    epsilon = np.finfo('float').eps
+    sphere = vtkSphereSource()
+    sphere.SetCenter(point)
+    sphere.SetRadius(1e-4)
+    sphere.SetPhiResolution(10)
+    sphere.SetThetaResolution(10)
+    sphere.Update()
+    poly_point = sphere.GetOutput()
+
+    distance_filter = vtkDistancePolyDataFilter()
+    distance_filter.SetInputData(0, polydata)
+    distance_filter.SetInputData(1, poly_point)
+    distance_filter.Update()
+
+    return distance_filter.GetOutput()
+
+
+def compute_furthest_point_from_two_points(source: vtkPolyData, p1, p2):
+    d1 = distance_to_polydata(source, p1)
+    d2 = distance_to_polydata(source, p2)
+    s1 = get_scalars(d1)
+    s2 = get_scalars(d2)
+
+    furthest_point_id = np.argmax(s1+s2)
+    furthest_point = source.GetPoint(furthest_point_id)
+
+    return np.asarray(furthest_point), furthest_point_id
+
+
+# def compute_furthest_point_from_two_points_and_from_plane(source: vtkPolyData, plane, p1, p2):
+#     points = get_points(source)
+#     d_plane, _ = compute_signed_distance_to_plane(plane, points)
+#     d_p1 = distance_to_polydata(source, p1)
+#     d_p2 = distance_to_polydata(source, p2)
+#     s1 = get_scalars(d_p1)
+#     s2 = get_scalars(d_p2)
+#
+#     furthest_id1 = np.argmax(s1+s2+d_plane)
+#     furthest_point1 = source.GetPoint(furthest_id1)
+#
+#     furthest_id2 = np.argmax(s1+s2+(d_plane*-1))
+#     furthest_point2 = source.GetPoint(furthest_id2)
+#
+#     return np.asarray(furthest_point1), np.asarray(furthest_point2)
