@@ -383,7 +383,7 @@ def save_nifti(image: vtkImageData, save_path):
     writer.Write()
 
 
-def decimate_polydata(poly: vtkPolyData, target=0.9):
+def decimate_polydata(poly: vtkPolyData, target=0.9, force=False):
     # Mesh decimation example:
     # https://kitware.github.io/vtk-examples/site/Python/Meshes/Decimation/
     """
@@ -405,9 +405,15 @@ def decimate_polydata(poly: vtkPolyData, target=0.9):
         reduction = 1 - target / num_cells
 
     decimate = vtkDecimatePro()
+    decimate.PreserveTopologyOn()
+    if force is True:
+        decimate.PreserveTopologyOff()
+        decimate.SplittingOn()
+        decimate.BoundaryVertexDeletionOn()
+        decimate.SetMaximumError(VTK_DOUBLE_MAX)
     decimate.SetInputData(poly)
     decimate.SetTargetReduction(reduction)
-    decimate.PreserveTopologyOn()
+
     decimate.Update()
     return decimate.GetOutput()
 
@@ -801,7 +807,7 @@ def create_mesh_from_image_labels(image_labels: vtkImageData, label_num: int, pr
     else:
         method = 'flying_edges'
         mesh = convert_voxels_to_poly(mask, method=method)
-        mesh = decimate_polydata(mesh, target=10000)
+        mesh = decimate_polydata(mesh, target=60000)
         mesh = smooth_polydata(mesh, n_iterations=15)
 
     return mesh
@@ -1078,7 +1084,7 @@ def grow_mesh(source: vtkPolyData, seed_point_id, threshold=0.1, min_growth_rate
 
         num_candidates = len(candidate_points)
         num_eligible = len(eligible_points)
-        growth_rate = num_eligible / num_candidates
+        growth_rate = num_eligible / (num_candidates + 1e-8)
 
         print("Iteration " + str(iteration) + ": " + str(num_eligible) + "/" + str(num_candidates) + "=" + str(growth_rate))
 

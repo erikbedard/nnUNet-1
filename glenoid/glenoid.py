@@ -13,10 +13,11 @@ import vtkmodules.vtkInteractionStyle
 import vtkmodules.vtkRenderingOpenGL2
 
 def main():
+    ts_or_tr = "labelsTs_ignored"
     dataset_dir = r"C:\erik\data\prepared_datasets\Task600_TotalShoulder"
-    labels_dir = os.path.join(dataset_dir, "labelsTr")
+    labels_dir = os.path.join(dataset_dir, ts_or_tr)
 
-    root_save_dir = os.path.join(dataset_dir, "derivatives", "labelsTr")
+    root_save_dir = os.path.join(dataset_dir, "derivatives", ts_or_tr)
     glenoid_labels_save_dir = os.path.join(root_save_dir, "glenoid_labels")
     glenoid_mask_save_dir = os.path.join(root_save_dir, "glenoid_masks")
     mesh_save_dir = os.path.join(root_save_dir, "meshes")
@@ -32,22 +33,27 @@ def main():
     labels_paths.sort()
     # labels_paths = [labels_paths[12]]
 
-    # import multiprocessing
-    # p = multiprocessing.Pool()
-    # N = len(labels_paths)
-    # data = zip(labels_paths, [glenoid_labels_save_dir]*N, [glenoid_labels_box_save_dir]*N, [mesh_save_dir]*N)
-    # p.map(process_file, data)
-    # p.close()
-    for filepath in labels_paths:
-        process_file(filepath, glenoid_labels_save_dir, glenoid_mask_save_dir, mesh_save_dir, processing_save_dir)
+    import multiprocessing
+    p = multiprocessing.Pool()
+    N = len(labels_paths)
+    data = zip(labels_paths,
+               [glenoid_labels_save_dir]*N,
+               [glenoid_mask_save_dir]*N,
+               [mesh_save_dir]*N,
+               [processing_save_dir]*N)
+    p.map(process_file, data)
+    p.close()
+ #   for filepath in labels_paths:
+ #       process_file(filepath, glenoid_labels_save_dir, glenoid_mask_save_dir, mesh_save_dir, processing_save_dir)
 
 
-# def process_file(data):
-#     filepath=data[0]
-#     glenoid_labels_save_dir=data[1]
-#     glenoid_labels_box_save_dir=data[2]
-#     mesh_save_dir=data[3]
-def process_file(filepath, glenoid_labels_save_dir, glenoid_mask_save_dir, mesh_save_dir, processing_save_dir):
+def process_file(data):
+    filepath=data[0]
+    glenoid_labels_save_dir=data[1]
+    glenoid_mask_save_dir=data[2]
+    mesh_save_dir=data[3]
+    processing_save_dir=data[4]
+#def process_file(filepath, glenoid_labels_save_dir, glenoid_mask_save_dir, mesh_save_dir, processing_save_dir):
 
     filename = os.path.basename(filepath).split('.')[0]
     print()
@@ -276,11 +282,14 @@ def get_initial_glenoid_point(scapula_mesh, initialize='scapular-plane', render=
         direction /= np.linalg.norm(direction)
         position = focal + 200*direction
 
+        y_axis_point = (0,1,0)
+        proj_pt = myvtk.project_point_onto_plane(scapula_plane, y_axis_point)
+
         renderer = vtkRenderer()
         camera = renderer.GetActiveCamera()
         camera.SetFocalPoint(focal)
         camera.SetPosition(position)
-        camera.ComputeViewPlaneNormal()
+        # camera.ComputeViewPlaneNormal()
         camera.SetViewUp(lateral_acromion)
 
         myvtk.plt_polydata(renderer, scapula_mesh, color='cornsilk')
@@ -342,6 +351,7 @@ def compute_glenoid_plane(scapula_curves,
     for p in glenoid_mesh_ids:
         glenoid_points.append(scapula_curves.GetPoint(p))
     p1, p2 = find_farthest_points(np.asarray(glenoid_points))
+
     _, p1 = myvtk.compute_signed_distance_to_plane(glenoid_plane, p1)
     _, p2 = myvtk.compute_signed_distance_to_plane(glenoid_plane, p2)
     dist_to_p1 = np.linalg.norm(p1-origin, 2)
@@ -470,11 +480,14 @@ def find_farthest_points(points):
         p1
         p2
     """
-    # Find a convex hull in O(N log N)
-    hull = ConvexHull(points)
+    if len(points) > 3:
+        # Find a convex hull in O(N log N)
+        hull = ConvexHull(points)
 
-    # Extract the points forming the hull
-    hull_points = points[hull.vertices, :]
+        # Extract the points forming the hull
+        hull_points = points[hull.vertices, :]
+    else:
+        hull_points = points
 
     # Naive way of finding the best pair in O(H^2) time if H is number of points on
     # hull
