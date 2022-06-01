@@ -6,6 +6,8 @@ import myvtk
 from vtkmodules.vtkRenderingCore import vtkRenderer
 import glob
 import os
+import pyvista as pv
+
 
 # noinspection PyUnresolvedReferences
 import vtkmodules.vtkInteractionStyle
@@ -13,7 +15,7 @@ import vtkmodules.vtkInteractionStyle
 import vtkmodules.vtkRenderingOpenGL2
 
 def main():
-    ts_or_tr = "labelsTs_ignored"
+    ts_or_tr = "labelsTr"
     dataset_dir = r"C:\erik\data\prepared_datasets\Task600_TotalShoulder"
     labels_dir = os.path.join(dataset_dir, ts_or_tr)
 
@@ -22,7 +24,6 @@ def main():
     glenoid_mask_save_dir = os.path.join(root_save_dir, "glenoid_masks")
     mesh_save_dir = os.path.join(root_save_dir, "meshes")
     processing_save_dir = os.path.join(root_save_dir, "processing")
-
     os.makedirs(glenoid_labels_save_dir, exist_ok=True)
     os.makedirs(glenoid_mask_save_dir, exist_ok=True)
     os.makedirs(mesh_save_dir, exist_ok=True)
@@ -63,7 +64,7 @@ def process_file(data):
     labels = myvtk.read_nifti(filepath)
     scapula_label_num = 1
     scapula_mask = myvtk.get_mask_from_labels(labels, scapula_label_num)
-    scapula_mesh = myvtk.create_mesh_from_image_labels(labels, scapula_label_num, preserve_boundary=False)
+    scapula_mesh = myvtk.create_mesh_from_image_labels(labels, scapula_label_num, output='uniform')
 
     render_geometry = True
     render_minimization = True
@@ -71,6 +72,7 @@ def process_file(data):
     render_segment = True
 
     # find point on glenoid
+    #render_save_path=None
     render_save_path = os.path.join(processing_save_dir, filename + "_1_geometry.png")
     point_on_glenoid, camera = get_initial_glenoid_point(
         scapula_mesh,
@@ -140,11 +142,11 @@ def process_file(data):
 
     # save glenoid meshes
     foreground = 1
-    mesh_voxels = myvtk.create_mesh_from_image_labels(glenoid_segmented, foreground, preserve_boundary=True)
+    mesh_voxels = myvtk.create_mesh_from_image_labels(glenoid_segmented, foreground, output='voxel-like')
     save_path_voxels = mesh_save_dir + os.path.sep + filename + "_glenoid.stl"
     myvtk.save_stl(mesh_voxels, save_path_voxels)
 
-    mesh_smooth = myvtk.create_mesh_from_image_labels(glenoid_mask, foreground, preserve_boundary=True)
+    mesh_smooth = myvtk.create_mesh_from_image_labels(glenoid_mask, foreground, output='smooth')
     save_path_smooth = mesh_save_dir + os.path.sep + filename + "_glenoid_mask.stl"
     myvtk.save_stl(mesh_smooth, save_path_smooth)
 

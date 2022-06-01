@@ -9,7 +9,7 @@ from vtk.util.numpy_support import *
 import numpy as np
 import copy
 import statistics
-
+import pyacvd
 
 def get_rgba(color, a=1):
     if type(color) is not str and len(color) is 4:
@@ -109,13 +109,15 @@ def plt_plane(renderer: vtkRenderer, plane, pt1, pt2, color='LightBlue', opacity
     renderer.AddActor(actor)
 
 
-def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato'):
+def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato', show_edges=False, edge_color='black'):
     """
     Add polydata to a scene.
     Args:
         renderer:
         polydata:
         color:
+        show_edges:
+        edge_color:
     """
     rgb = get_rgb(color)
     rgba = get_rgba(color)
@@ -136,6 +138,10 @@ def plt_polydata(renderer: vtkRenderer, polydata: vtkPolyData, color='tomato'):
     actor.SetMapper(mapper)
     actor.GetProperty().SetColor(rgb)
     actor.GetProperty().SetOpacity(rgba[3])
+    if show_edges is True:
+        actor.GetProperty().SetEdgeVisibility(1)
+        edges_rgb = get_rgb(edge_color)
+        actor.GetProperty().SetEdgeColor(edges_rgb)
 
     renderer.AddActor(actor)
 
@@ -799,16 +805,49 @@ def convert_voxels_to_cube_mesh(image: vtkImageData, label_num: int):
     return trifilter.GetOutput()
 
 
-def create_mesh_from_image_labels(image_labels: vtkImageData, label_num: int, preserve_boundary=True):
+def unwrap(mesh, deep:bool=False):
+    if isinstance(mesh, pyvista.PolyData):
+        obj = vtkPolyData()
+    elif isinstance(mesh, pyvista.UniformGrid):
+        obj = vtkImageData()
+    elif isinstance(mesh, pyvista.UnstructuredGrid):
+        obj = vtkUnstructuredGrid()
+
+    if deep:
+        obj.DeepCopy(mesh)
+    else:
+        obj.ShallowCopy(mesh)
+    return obj
+
+
+def create_mesh_from_image_labels(image_labels: vtkImageData, label_num: int, output='uniform'):
+    valid_output = ['uniform', 'voxel-like', 'smooth']
     mask = get_mask_from_labels(image_labels, label_num)
-    if preserve_boundary is True:
+    if output == 'voxel-like':
         method = 'preserve_boundary'
         mesh = convert_voxels_to_poly(mask, method=method)
-    else:
+    elif output == 'smooth':
         method = 'flying_edges'
         mesh = convert_voxels_to_poly(mask, method=method)
         mesh = decimate_polydata(mesh, target=60000)
         mesh = smooth_polydata(mesh, n_iterations=15)
+    elif output == 'uniform':
+
+        method = 'flying_edges'
+        mesh = convert_voxels_to_poly(mask, method=method)
+        mesh = decimate_polydata(mesh, target=60000)
+        mesh = smooth_polydata(mesh, n_iterations=15)
+        pvmesh = pyvista.wrap(mesh)
+        import warnings  # disable warnings about using deprecated pyvista
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            clus = pyacvd.Clustering(pvmesh)
+            clus.subdivide(3)  # mesh is not dense enough for uniform remeshing
+            clus.cluster(50000)
+            pvremesh = clus.create_mesh()
+        mesh = unwrap(pvremesh)
+    else:
+        return RuntimeError
 
     return mesh
 
