@@ -75,7 +75,8 @@ class SegmentationNetwork(NeuralNetwork):
                    step_size: float = 0.5, patch_size: Tuple[int, ...] = None, regions_class_order: Tuple[int, ...] = None,
                    use_gaussian: bool = False, pad_border_mode: str = "constant",
                    pad_kwargs: dict = None, all_in_gpu: bool = False,
-                   verbose: bool = True, mixed_precision: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+                   verbose: bool = True, mixed_precision: bool = True,
+                   use_dropout: bool = False) -> Tuple[np.ndarray, np.ndarray]:
         """
         Use this function to predict a 3D image. It does not matter whether the network is a 2D or 3D U-Net, it will
         detect that automatically and run the appropriate code.
@@ -129,9 +130,14 @@ class SegmentationNetwork(NeuralNetwork):
             if self.conv_op == nn.Conv3d:
                 if max(mirror_axes) > 2:
                     raise ValueError("mirror axes. duh")
+        if use_dropout:
+            self.train()
 
         if self.training:
-            print('WARNING! Network is in train mode during inference. This may be intended, or not...')
+            if use_dropout:
+                print('NOTE: Network is in train mode during inference to make use of dropout.')
+            else:
+                print('WARNING! Network is in train mode during inference. This may be intended, or not...')
 
         assert len(x.shape) == 4, "data must have shape (c,x,y,z)"
 

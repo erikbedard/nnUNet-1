@@ -121,6 +121,8 @@ def main():
                         help='Predictions are done with mixed precision by default. This improves speed and reduces '
                              'the required vram. If you want to disable mixed precision you can set this flag. Note '
                              'that yhis is not recommended (mixed precision is ~2x faster!)')
+    parser.add_argument('--use_dropout', default=False, action='store_true', required=False,
+                        help='Set network to "train" mode to enable dropout during inference')
 
     args = parser.parse_args()
     input_folder = args.input_folder
@@ -143,8 +145,18 @@ def main():
     model = args.model
     trainer_class_name = args.trainer_class_name
     cascade_trainer_class_name = args.cascade_trainer_class_name
+    use_dropout = args.use_dropout
 
     task_name = args.task_name
+
+    if use_dropout:
+        # ensure deterministic predictions using dropout
+        def set_seed(seed):
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+        set_seed(42)
 
     if not task_name.startswith("Task"):
         task_id = int(task_name)
@@ -218,7 +230,7 @@ def main():
                         num_threads_nifti_save, lowres_segmentations, part_id, num_parts, not disable_tta,
                         overwrite_existing=overwrite_existing, mode=mode, overwrite_all_in_gpu=all_in_gpu,
                         mixed_precision=not args.disable_mixed_precision,
-                        step_size=step_size, checkpoint_name=args.chk)
+                        step_size=step_size, checkpoint_name=args.chk, use_dropout=use_dropout)
 
 
 if __name__ == "__main__":
