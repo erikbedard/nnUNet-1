@@ -53,7 +53,7 @@ class Evaluator:
     default_advanced_metrics = [
         #"Hausdorff Distance",
         "Hausdorff Distance 95",
-        #"Avg. Surface Distance",
+        "Avg. Surface Distance",
         #"Avg. Symmetric Surface Distance"
     ]
 
@@ -149,7 +149,7 @@ class Evaluator:
         if metric not in self.metrics:
             self.metrics.append(metric)
 
-    def evaluate(self, test=None, reference=None, advanced=False, **metric_kwargs):
+    def evaluate(self, test=None, reference=None, advanced=True, **metric_kwargs):
         """Compute metrics for segmentations."""
         if test is not None:
             self.set_test(test)
@@ -327,7 +327,7 @@ def aggregate_scores(test_ref_pairs,
                      json_description="",
                      json_author="Fabian",
                      json_task="",
-                     num_threads=2,
+                     num_threads=15,
                      **metric_kwargs):
     """
     test = predicted image
@@ -457,7 +457,7 @@ def evaluate_folder(folder_with_gts: str, folder_with_predictions: str, labels: 
     assert all([i in files_gt for i in files_pred]), "files missing in folder_with_gts"
     test_ref_pairs = [(join(folder_with_predictions, i), join(folder_with_gts, i)) for i in files_pred]
     res = aggregate_scores(test_ref_pairs, json_output_file=join(folder_with_predictions, "summary.json"),
-                           num_threads=8, labels=labels, **metric_kwargs)
+                           num_threads=15, labels=labels, **metric_kwargs)
     return res
 
 
@@ -481,3 +481,7 @@ def nnunet_evaluate_folder():
                                                                        "information.")
     args = parser.parse_args()
     return evaluate_folder(args.ref, args.pred, args.l)
+
+
+if __name__ == "__main__":
+    nnunet_evaluate_folder()
