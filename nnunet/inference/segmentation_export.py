@@ -30,7 +30,8 @@ def save_segmentation_nifti_from_softmax(segmentation_softmax: Union[str, np.nda
                                          seg_postprogess_fn: callable = None, seg_postprocess_args: tuple = None,
                                          resampled_npz_fname: str = None,
                                          non_postprocessed_fname: str = None, force_separate_z: bool = None,
-                                         interpolation_order_z: int = 0, verbose: bool = True):
+                                         interpolation_order_z: int = 0, verbose: bool = True,
+                                         save_npz_only = False, save_npz_as_nifti = False):
     """
     This is a utility for writing segmentations to nifto and npz. It requires the data to have been preprocessed by
     GenericPreprocessor because it depends on the property dictionary output (dct) to know the geometry of the original
@@ -111,48 +112,75 @@ def save_segmentation_nifti_from_softmax(segmentation_softmax: Union[str, np.nda
 
     if resampled_npz_fname is not None:
         np.savez_compressed(resampled_npz_fname, softmax=seg_old_spacing.astype(np.float16))
+        if save_npz_as_nifti:
+            convert_softmax_to_nifti(resampled_npz_fname,
+                                     spacing=properties_dict['itk_spacing'],
+                                     origin=properties_dict['itk_origin'],
+                                     direction=properties_dict['itk_direction'])
+
         # this is needed for ensembling if the nonlinearity is sigmoid
         if region_class_order is not None:
             properties_dict['regions_class_order'] = region_class_order
-        save_pickle(properties_dict, resampled_npz_fname[:-4] + ".pkl")
+        if not save_npz_only:
+            save_pickle(properties_dict, resampled_npz_fname[:-4] + ".pkl")
 
-    if region_class_order is None:
-        seg_old_spacing = seg_old_spacing.argmax(0)
-    else:
-        seg_old_spacing_final = np.zeros(seg_old_spacing.shape[1:])
-        for i, c in enumerate(region_class_order):
-            seg_old_spacing_final[seg_old_spacing[i] > 0.5] = c
-        seg_old_spacing = seg_old_spacing_final
+    if not save_npz_only:
+        if region_class_order is None:
+            seg_old_spacing = seg_old_spacing.argmax(0)
+        else:
+            seg_old_spacing_final = np.zeros(seg_old_spacing.shape[1:])
+            for i, c in enumerate(region_class_order):
+                seg_old_spacing_final[seg_old_spacing[i] > 0.5] = c
+            seg_old_spacing = seg_old_spacing_final
 
-    bbox = properties_dict.get('crop_bbox')
+        bbox = properties_dict.get('crop_bbox')
 
-    if bbox is not None:
-        seg_old_size = np.zeros(shape_original_before_cropping)
-        for c in range(3):
-            bbox[c][1] = np.min((bbox[c][0] + seg_old_spacing.shape[c], shape_original_before_cropping[c]))
-        seg_old_size[bbox[0][0]:bbox[0][1],
-        bbox[1][0]:bbox[1][1],
-        bbox[2][0]:bbox[2][1]] = seg_old_spacing
-    else:
-        seg_old_size = seg_old_spacing
+        if bbox is not None:
+            seg_old_size = np.zeros(shape_original_before_cropping)
+            for c in range(3):
+                bbox[c][1] = np.min((bbox[c][0] + seg_old_spacing.shape[c], shape_original_before_cropping[c]))
+            seg_old_size[bbox[0][0]:bbox[0][1],
+            bbox[1][0]:bbox[1][1],
+            bbox[2][0]:bbox[2][1]] = seg_old_spacing
+        else:
+            seg_old_size = seg_old_spacing
 
-    if seg_postprogess_fn is not None:
-        seg_old_size_postprocessed = seg_postprogess_fn(np.copy(seg_old_size), *seg_postprocess_args)
-    else:
-        seg_old_size_postprocessed = seg_old_size
+        if seg_postprogess_fn is not None:
+            seg_old_size_postprocessed = seg_postprogess_fn(np.copy(seg_old_size), *seg_postprocess_args)
+        else:
+            seg_old_size_postprocessed = seg_old_size
 
-    seg_resized_itk = sitk.GetImageFromArray(seg_old_size_postprocessed.astype(np.uint8))
-    seg_resized_itk.SetSpacing(properties_dict['itk_spacing'])
-    seg_resized_itk.SetOrigin(properties_dict['itk_origin'])
-    seg_resized_itk.SetDirection(properties_dict['itk_direction'])
-    sitk.WriteImage(seg_resized_itk, out_fname)
-
-    if (non_postprocessed_fname is not None) and (seg_postprogess_fn is not None):
-        seg_resized_itk = sitk.GetImageFromArray(seg_old_size.astype(np.uint8))
+        seg_resized_itk = sitk.GetImageFromArray(seg_old_size_postprocessed.astype(np.uint8))
         seg_resized_itk.SetSpacing(properties_dict['itk_spacing'])
         seg_resized_itk.SetOrigin(properties_dict['itk_origin'])
         seg_resized_itk.SetDirection(properties_dict['itk_direction'])
-        sitk.WriteImage(seg_resized_itk, non_postprocessed_fname)
+        sitk.WriteImage(seg_resized_itk, out_fname)
+
+        if (non_postprocessed_fname is not None) and (seg_postprogess_fn is not None):
+            seg_resized_itk = sitk.GetImageFromArray(seg_old_size.astype(np.uint8))
+            seg_resized_itk.SetSpacing(properties_dict['itk_spacing'])
+            seg_resized_itk.SetOrigin(properties_dict['itk_origin'])
+            seg_resized_itk.SetDirection(properties_dict['itk_direction'])
+            sitk.WriteImage(seg_resized_itk, non_postprocessed_fname)
+
+
+def convert_softmax_to_nifti(npz_input_path,
+                             spacing=(1,1,1), origin=(0,0,0), direction=(1, 0, 0, 0, 1, 0, 0, 0, 1)):
+    # This function loads a 4d .npz file which contains 3d softmax predictions for multiple classes
+    # A separate nifti file is written with the softmax values for each class.
+
+    f_path_no_ext = npz_input_path[:-4]
+
+    softmax = np.load(npz_input_path)["softmax"].astype("float32")
+    num_labels = softmax.shape[0]
+    for label in range(num_labels):
+        out_fname = f_path_no_ext + "_" + str(label) + ".nii.gz"
+
+        itk_image = sitk.GetImageFromArray(softmax[label, :, :, :])
+        itk_image.SetSpacing(spacing)
+        itk_image.SetOrigin(origin)
+        itk_image.SetDirection(direction)
+        sitk.WriteImage(itk_image, out_fname)
 
 
 def save_segmentation_nifti(segmentation, out_fname, dct, order=1, force_separate_z=None, order_z=0):

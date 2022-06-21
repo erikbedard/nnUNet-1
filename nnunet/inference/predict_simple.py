@@ -123,6 +123,9 @@ def main():
                              'that yhis is not recommended (mixed precision is ~2x faster!)')
     parser.add_argument('--use_dropout', default=False, action='store_true', required=False,
                         help='Set network to "train" mode to enable dropout during inference')
+    parser.add_argument('--save_npz_all', default=False, action='store_true', required=False,
+                        help='Save all individiual test time augmentation predictions for all folds separately')
+
 
     args = parser.parse_args()
     input_folder = args.input_folder
@@ -146,6 +149,7 @@ def main():
     trainer_class_name = args.trainer_class_name
     cascade_trainer_class_name = args.cascade_trainer_class_name
     use_dropout = args.use_dropout
+    save_npz_all = args.save_npz_all
 
     task_name = args.task_name
 
@@ -230,7 +234,8 @@ def main():
                         num_threads_nifti_save, lowres_segmentations, part_id, num_parts, not disable_tta,
                         overwrite_existing=overwrite_existing, mode=mode, overwrite_all_in_gpu=all_in_gpu,
                         mixed_precision=not args.disable_mixed_precision,
-                        step_size=step_size, checkpoint_name=args.chk, use_dropout=use_dropout)
+                        step_size=step_size, checkpoint_name=args.chk,
+                        use_dropout=use_dropout, save_npz_all=save_npz_all)
 
 
 if __name__ == "__main__":

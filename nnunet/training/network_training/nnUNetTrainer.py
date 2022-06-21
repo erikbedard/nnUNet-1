@@ -482,7 +482,8 @@ class nnUNetTrainer(NetworkTrainer):
                                              interpolation_order_z=interpolation_order_z)
         print("done")
 
-    def predict_preprocessed_data_return_seg_and_softmax(self, data: np.ndarray, do_mirroring: bool = True,
+    from typing import Union
+    def predict_preprocessed_data_return_seg_and_softmax(self, data: np.ndarray, do_mirroring: Union[int, bool] = True,
                                                          mirror_axes: Tuple[int] = None,
                                                          use_sliding_window: bool = True, step_size: float = 0.5,
                                                          use_gaussian: bool = True, pad_border_mode: str = 'constant',

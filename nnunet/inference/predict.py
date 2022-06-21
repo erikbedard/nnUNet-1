@@ -11,8 +11,7 @@
 #    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
-
-
+import os.path
 import sys
 import argparse
 from copy import deepcopy
@@ -137,7 +136,7 @@ def preprocess_multithreaded(trainer, list_of_lists, output_files, num_processes
 def predict_cases(model, list_of_lists, output_filenames, folds, save_npz, num_threads_preprocessing,
                   num_threads_nifti_save, segs_from_prev_stage=None, do_tta=True, mixed_precision=True, overwrite_existing=False,
                   all_in_gpu=False, step_size=0.5, checkpoint_name="model_final_checkpoint",
-                  segmentation_export_kwargs: dict = None, use_dropout: bool = False):
+                  segmentation_export_kwargs: dict = None, use_dropout: bool = False, save_npz_all = False):
     """
     :param segmentation_export_kwargs:
     :param model: folder where the model is saved, must contain fold_x subfolders
@@ -205,35 +204,15 @@ def predict_cases(model, list_of_lists, output_filenames, folds, save_npz, num_t
     print("starting preprocessing generator")
     preprocessing = preprocess_multithreaded(trainer, list_of_lists, cleaned_output_files, num_threads_preprocessing,
                                              segs_from_prev_stage)
-    print("starting prediction...")
-    all_output_files = []
-    for preprocessed in preprocessing:
-        output_filename, (d, dct) = preprocessed
-        all_output_files.append(all_output_files)
-        if isinstance(d, str):
-            data = np.load(d)
-            os.remove(d)
-            d = data
 
-        print("predicting", output_filename)
-        softmax = []
-        for p in params:
-            trainer.load_checkpoint_ram(p, False)
-            softmax.append(trainer.predict_preprocessed_data_return_seg_and_softmax(
-                d, do_mirroring=do_tta, mirror_axes=trainer.data_aug_params['mirror_axes'], use_sliding_window=True,
-                step_size=step_size, use_gaussian=True, all_in_gpu=all_in_gpu,
-                mixed_precision=mixed_precision, use_dropout=use_dropout)[1][None])
-
-        softmax = np.vstack(softmax)
-        softmax_mean = np.mean(softmax, 0)
-
+    def save_softmax(softmax_input, f_name, save_npz_only=False, save_npz_as_nifti=False):
         transpose_forward = trainer.plans.get('transpose_forward')
         if transpose_forward is not None:
             transpose_backward = trainer.plans.get('transpose_backward')
-            softmax_mean = softmax_mean.transpose([0] + [i + 1 for i in transpose_backward])
+            softmax_input = softmax_input.transpose([0] + [i + 1 for i in transpose_backward])
 
         if save_npz:
-            npz_file = output_filename[:-7] + ".npz"
+            npz_file = f_name[:-7] + ".npz"
         else:
             npz_file = None
 
@@ -252,17 +231,99 @@ def predict_cases(model, list_of_lists, output_filenames, folds, save_npz, num_t
         bytes_per_voxel = 4
         if all_in_gpu:
             bytes_per_voxel = 2  # if all_in_gpu then the return value is half (float16)
-        if np.prod(softmax_mean.shape) > (2e9 / bytes_per_voxel * 0.85):  # * 0.85 just to be save
+        if np.prod(softmax_input.shape) > (2e9 / bytes_per_voxel * 0.85):  # * 0.85 just to be save
             print(
                 "This output is too large for python process-process communication. Saving output temporarily to disk")
-            np.save(output_filename[:-7] + ".npy", softmax_mean)
-            softmax_mean = output_filename[:-7] + ".npy"
+            np.save(f_name[:-7] + ".npy", softmax_input)
+            softmax_input = f_name[:-7] + ".npy"
 
+        verbose = True
         results.append(pool.starmap_async(save_segmentation_nifti_from_softmax,
-                                          ((softmax_mean, output_filename, dct, interpolation_order, region_class_order,
-                                            None, None,
-                                            npz_file, None, force_separate_z, interpolation_order_z),)
+                                          (
+                                          (softmax_input, f_name, dct, interpolation_order, region_class_order,
+                                           None, None,
+                                           npz_file, None, force_separate_z, interpolation_order_z,
+                                           verbose, save_npz_only, save_npz_as_nifti),)
                                           ))
+
+    print("starting prediction...")
+    all_output_files = []
+    for preprocessed in preprocessing:
+        output_filename, (d, dct) = preprocessed
+        all_output_files.append(all_output_files)
+        if isinstance(d, str):
+            data = np.load(d)
+            os.remove(d)
+            d = data
+
+        print("predicting", output_filename)
+        softmax = []
+        softmax_mean = None
+        softmax_filelist = []
+        i = 0
+        for p in params:
+            trainer.load_checkpoint_ram(p, False)
+            if save_npz_all:
+                if not do_tta:
+                    print("NOTE: tta was not enabled, but will be forced on to save all npz")
+                    do_tta = True
+                no_ext = output_filename[:-7]
+                base = os.path.basename(no_ext)
+                subfolder = no_ext+"_z"
+                os.makedirs(subfolder, exist_ok=True)
+                output_filename_in_subfolder = os.path.join(subfolder, base + output_filename[-7::])
+                for m in range(0, 8):  # generate separate softmax predictions for each augmentation
+                    suffix = str(i) + "_" + str(m)
+                    save_name = output_filename_in_subfolder[:-7] + "_" + suffix + output_filename_in_subfolder[-7::]
+                    npz_name = save_name[:-7] + ".npz"
+                    softmax_filelist.append(npz_name)
+                    if os.path.exists(npz_name):
+                        softmax = np.load(npz_name)["softmax"]
+                    else:
+                        softmax = trainer.predict_preprocessed_data_return_seg_and_softmax(
+                            d, do_mirroring=m, mirror_axes=trainer.data_aug_params['mirror_axes'], use_sliding_window=True,
+                            step_size=step_size, use_gaussian=True, all_in_gpu=all_in_gpu,
+                            mixed_precision=mixed_precision, use_dropout=use_dropout)[1][None]
+                        softmax = np.squeeze(softmax)
+                        save_softmax(softmax, save_name, save_npz_only=True)
+
+                    num_predictions = 40  # (5 folds ) * (8 predictions) = 40
+                    if softmax_mean is None:
+                        softmax_mean = softmax / num_predictions
+                    else:
+                        softmax_mean += softmax / num_predictions
+            else:
+                softmax.append(trainer.predict_preprocessed_data_return_seg_and_softmax(
+                    d, do_mirroring=do_tta, mirror_axes=trainer.data_aug_params['mirror_axes'], use_sliding_window=True,
+                    step_size=step_size, use_gaussian=True, all_in_gpu=all_in_gpu,
+                    mixed_precision=mixed_precision, use_dropout=use_dropout)[1][None])
+            i += 1
+
+        if save_npz_all:
+            print("computing prediction variance")
+            softmax_var = []
+            num_classes = softmax.shape[0]
+            save_name = output_filename[:-7] + "_" + "var" + output_filename[-7::]
+            if os.path.exists(save_name):
+                softmax_var = np.load(save_name + ".npz")["softmax"]
+            else:
+                for c in range(num_classes):
+                    data = []
+                    #if c == 0: continue  # ignore background class
+                    for f in softmax_filelist:
+                        data.append(np.load(f)["softmax"][c,:,:,:])
+                    data = np.array(data)
+                    softmax_var.append(np.std(data,0))
+
+                softmax_var = np.array(softmax_var)
+                save_softmax(softmax_var, save_name, save_npz_only=True, save_npz_as_nifti=True)
+
+
+        else:
+            softmax = np.vstack(softmax)
+            softmax_mean = np.mean(softmax, 0)
+
+        save_softmax(softmax_mean, output_filename, save_npz_as_nifti=True)
 
     print("inference done. Now waiting for the segmentation export to finish...")
     _ = [i.get() for i in results]
@@ -586,7 +647,8 @@ def predict_from_folder(model: str, input_folder: str, output_folder: str, folds
                         part_id: int, num_parts: int, tta: bool, mixed_precision: bool = True,
                         overwrite_existing: bool = True, mode: str = 'normal', overwrite_all_in_gpu: bool = None,
                         step_size: float = 0.5, checkpoint_name: str = "model_final_checkpoint",
-                        segmentation_export_kwargs: dict = None, use_dropout: bool = False):
+                        segmentation_export_kwargs: dict = None,
+                        use_dropout: bool = False, save_npz_all = False):
     """
         here we use the standard naming scheme to generate list_of_lists and output_files needed by predict_cases
 
@@ -639,7 +701,8 @@ def predict_from_folder(model: str, input_folder: str, output_folder: str, folds
                              save_npz, num_threads_preprocessing, num_threads_nifti_save, lowres_segmentations, tta,
                              mixed_precision=mixed_precision, overwrite_existing=overwrite_existing, all_in_gpu=all_in_gpu,
                              step_size=step_size, checkpoint_name=checkpoint_name,
-                             segmentation_export_kwargs=segmentation_export_kwargs, use_dropout=use_dropout)
+                             segmentation_export_kwargs=segmentation_export_kwargs,
+                             use_dropout=use_dropout, save_npz_all=save_npz_all)
     elif mode == "fast":
         if overwrite_all_in_gpu is None:
             all_in_gpu = True

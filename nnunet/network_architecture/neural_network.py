@@ -70,7 +70,7 @@ class SegmentationNetwork(NeuralNetwork):
         self._gaussian_3d = self._patch_size_for_gaussian_3d = None
         self._gaussian_2d = self._patch_size_for_gaussian_2d = None
 
-    def predict_3D(self, x: np.ndarray, do_mirroring: bool, mirror_axes: Tuple[int, ...] = (0, 1, 2),
+    def predict_3D(self, x: np.ndarray, do_mirroring: Union[int, bool], mirror_axes: Tuple[int, ...] = (0, 1, 2),
                    use_sliding_window: bool = False,
                    step_size: float = 0.5, patch_size: Tuple[int, ...] = None, regions_class_order: Tuple[int, ...] = None,
                    use_gaussian: bool = False, pad_border_mode: str = "constant",
@@ -89,6 +89,7 @@ class SegmentationNetwork(NeuralNetwork):
 
         :param x: Your input data. Must be a nd.ndarray of shape (c, x, y, z).
         :param do_mirroring: If True, use test time data augmentation in the form of mirroring
+                             If int [0,8), perform a single mirroring augmentation
         :param mirror_axes: Determines which axes to use for mirroing. Per default, mirroring is done along all three
         axes
         :param use_sliding_window: if True, run sliding window prediction. Heavily recommended! This is also the default
@@ -503,7 +504,7 @@ class SegmentationNetwork(NeuralNetwork):
         return predicted_segmentation, predicted_probabilities
 
     def _internal_maybe_mirror_and_pred_3D(self, x: Union[np.ndarray, torch.tensor], mirror_axes: tuple,
-                                           do_mirroring: bool = True,
+                                           do_mirroring: Union[bool, int] = True,
                                            mult: np.ndarray or torch.tensor = None) -> torch.tensor:
         assert len(x.shape) == 5, 'x must be (b, c, x, y, z)'
         # everything in here takes place on the GPU. If x and mult are not yet on GPU this will be taken care of here
@@ -516,14 +517,21 @@ class SegmentationNetwork(NeuralNetwork):
         if mult is not None:
             mult = to_cuda(maybe_to_torch(mult), gpu_id=self.get_device())
 
-        if do_mirroring:
-            mirror_idx = 8
-            num_results = 2 ** len(mirror_axes)
-        else:
-            mirror_idx = 1
-            num_results = 1
+        if type(do_mirroring) is bool:
+            if do_mirroring:
+                mirror_idx_range = range(8)
+                num_results = 2 ** len(mirror_axes)
+            else:
+                mirror_idx_range = range(1)
+                num_results = 1
 
-        for m in range(mirror_idx):
+        elif type(do_mirroring) is int and 0 <= do_mirroring < 8:
+            mirror_idx_range = range(do_mirroring, do_mirroring+1)
+            num_results = 1
+        else:
+            return RuntimeError
+
+        for m in mirror_idx_range:
             if m == 0:
                 pred = self.inference_apply_nonlin(self(x))
                 result_torch += 1 / num_results * pred
