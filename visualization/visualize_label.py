@@ -5,6 +5,9 @@ import os
 import sys
 import pyvista as pv
 
+from vtkmodules.vtkCommonDataModel import vtkImageData
+from tqdm import tqdm
+
 
 def main():
 
@@ -34,7 +37,7 @@ def main():
                         help="File path of NIFTI image with label data.")
     parser.add_argument("--labels_array", type=str, default=None,
                         help="Name of array to be read from 'labels_image' for visualization."
-                             "If not specified, the default active array will be used.")
+                             "If not specified, the default active array is used.")
     parser.add_argument("--label_num", type=int, default=1,
                         help="Integer value of the label to be visualized. "
                              "If not specified, a default value of 1 is used.")
@@ -45,7 +48,7 @@ def main():
                              "the mask image. ")
     parser.add_argument("--submask_array", type=str, default=None,
                         help="Name of array to be read from 'sub_mask_image'. "
-                             "If not specified, the default active array will be used.")
+                             "If not specified, the default active array is used.")
 
     # optional scalars
     parser.add_argument("--scalars_image", type=str, default=None,
@@ -53,20 +56,19 @@ def main():
                              "containing the scalar values.")
     parser.add_argument('--scalars_array', type=str, default=None,
                         help="Name of array to be read from 'scalars_image'. "
-                             "If not specified, the first variable in the file will be used.")
+                             "If not specified, the first variable in the file is used.")
     parser.add_argument("--scalars_name", type=str, default="",
                         help="Name of scalar data to show on the scalar bar. "
-                             "If not specified, the name will be blank.")
+                             "If not specified, the name is blank.")
 
     # optional video
     parser.add_argument("--save_video", default=False, action='store_true',
                         help="Optionally save a 360-degree video of the visualization "
                              "in the same directory as the labels_image.")
-    parser.add_argument("--save_video_dir", type=str, default=None,
+    parser.add_argument("--video_dir", type=str, default=None,
                         help="Optionally specify directory to save a 360-degree video of the visualization.")
     parser.add_argument("--background", default=False, action='store_true', required = '--save_video' in sys.argv,
                         help="Save video in background only and do not show the plot.")
-
 
     args = parser.parse_args()
 
@@ -126,9 +128,9 @@ def main():
     else:
         video_name = base + "_" + str(args.label_num) + "_" + scalars_name + ".mp4"
 
-    if args.save_video_dir is not None:
+    if args.video_dir is not None:
         # save video to specified dir
-        video_path = os.path.join(args.save_video_dir, video_name)
+        video_path = os.path.join(args.video_dir, video_name)
     elif args.save_video:
         # save video to same dir as input file
         parent_dir = os.path.dirname(args.labels_image)
@@ -137,11 +139,84 @@ def main():
         video_path = None
     show_plot = not args.background
 
-    visualize.visualize_mask(mask,
-                             scalars=scalars,
-                             scalar_name=scalars_name,
-                             save_video_path=video_path,
-                             show_plot=show_plot)
+    visualize_mask(mask,
+                   scalars=scalars,
+                   scalar_name=scalars_name,
+                   save_video_path=video_path,
+                   show_plot=show_plot)
+
+
+def visualize_mask(mask: vtkImageData, scalars: np.ndarray = None, scalar_name="", save_video_path=None, show_plot=True):
+    mask = pv.wrap(mask)
+    mask_scalars_name = mask.active_scalars_name
+    mask = visualize.image_points_to_voxels(mask)
+
+    if scalars is not None:
+        mask.cell_data[scalar_name] = scalars.flatten(order="F").astype('float32')
+    mask = mask.threshold(value=1, scalars=mask_scalars_name)
+    # arr = mask.cell_data["NIFTI"]
+    # cell_ids = np.argwhere(arr == 1)
+    # mask = mask.extract_cells(cell_ids)
+
+    if show_plot:
+        pv.set_plot_theme('document')
+        plotter = pv.Plotter()
+        plotter.hide_axes()
+
+        if np.all(mask.active_scalars == 1):
+            plotter.add_mesh(mask, color='cornsilk')
+        else:
+            plotter.add_mesh(mask)
+            plotter.remove_scalar_bar()
+            plotter.add_scalar_bar(title=scalar_name, vertical=True)
+
+        plotter.show()
+
+    if save_video_path is not None:
+        render_video(mask, save_video_path)
+
+
+def render_video(mesh, file_name: str,
+                 frame_rate: int = 30,
+                 aspect_ratio=np.array([8, 9]),
+                 ppi=160,  # leave this as a multiple of 16 or codec fails
+                 revolution=360,  # degrees in a full revolution
+                 n_frames=360,  # frames per revolution
+                 fade_in=0,  # number of frames to hold still for before rotating
+                 fade_out=0,  # number of frames to hold still for after rotating
+                 scalar_name=""):
+
+    resolution = aspect_ratio * ppi
+    mesh = pv.wrap(mesh)
+    plotter = pv.Plotter(off_screen=True, window_size=resolution)
+    plotter.open_movie(file_name, framerate=frame_rate)
+
+    sargs = dict(
+        title=scalar_name,
+        fmt="%.3f",
+        shadow=True,
+        vertical=True
+    )
+    if np.all(mesh.active_scalars == 1):
+        plotter.add_mesh(mesh, lighting=True, color="cornsilk")
+    else:
+        plotter.add_mesh(mesh, lighting=True, scalar_bar_args=sargs)
+    plotter.show(auto_close=False)
+
+    for _ in range(fade_in):
+        plotter.write_frame()
+
+    angle = revolution / n_frames
+    mesh_center = visualize.get_mesh_center(mesh)
+    plotter.write_frame()
+    for _ in tqdm(range(n_frames), desc="rendering '" + file_name + "'"):
+        mesh.rotate_z(angle, point=mesh_center, inplace=True)
+        plotter.write_frame()
+
+    for _ in range(fade_out):
+        plotter.write_frame()
+
+    plotter.close()
 
 
 if __name__ == "__main__":
