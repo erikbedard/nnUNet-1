@@ -14,6 +14,7 @@ import vtkmodules.vtkInteractionStyle
 # noinspection PyUnresolvedReferences
 import vtkmodules.vtkRenderingOpenGL2
 
+
 def main():
     ts_or_tr = "labelsTr"
     dataset_dir = r"C:\erik\data\prepared_datasets\Task600_TotalShoulder"
@@ -32,11 +33,12 @@ def main():
     # get lists of exiting files
     labels_paths = glob.glob(os.path.join(labels_dir, '*.nii.gz'))
     labels_paths.sort()
-    # labels_paths = [labels_paths[12]]
+    # labels_paths = [labels_paths[8]]
 
     import multiprocessing
-    p = multiprocessing.Pool()
+    p = multiprocessing.Pool(os.cpu_count()-1)
     N = len(labels_paths)
+    # N=1
     data = zip(labels_paths,
                [glenoid_labels_save_dir]*N,
                [glenoid_mask_save_dir]*N,
@@ -146,9 +148,9 @@ def process_file(data):
     save_path_voxels = mesh_save_dir + os.path.sep + filename + "_glenoid.stl"
     myvtk.save_stl(mesh_voxels, save_path_voxels)
 
-    mesh_smooth = myvtk.create_mesh_from_image_labels(glenoid_mask, foreground, output='smooth')
-    save_path_smooth = mesh_save_dir + os.path.sep + filename + "_glenoid_mask.stl"
-    myvtk.save_stl(mesh_smooth, save_path_smooth)
+    mesh_mask = myvtk.create_mesh_from_image_labels(glenoid_mask, foreground, output='voxel-like')
+    save_path_mask = mesh_save_dir + os.path.sep + filename + "_glenoid_mask.stl"
+    myvtk.save_stl(mesh_mask, save_path_mask)
 
 
     # save scapula meshes
@@ -304,11 +306,11 @@ def get_initial_glenoid_point(scapula_mesh, initialize='scapular-plane', render=
 
         #myvtk.plt_point(renderer, midpoint_near_glenoid, radius=1, color='black')
 
-        myvtk.plt_point(renderer, ant_post_point, radius=1, color='green')
-        myvtk.plt_line(renderer, ant_post_point, inferior_angle, color='green')
+        #myvtk.plt_point(renderer, ant_post_point, radius=1, color='green')
+        #myvtk.plt_line(renderer, ant_post_point, inferior_angle, color='green')
 
-        myvtk.plt_point(renderer, triple_point, radius=1, color='red')
-        myvtk.plt_line(renderer, triple_point, inferior_angle, color='red')
+        #myvtk.plt_point(renderer, triple_point, radius=1, color='red')
+        #myvtk.plt_line(renderer, triple_point, inferior_angle, color='red')
 
         myvtk.plt_point(renderer, lateral_acromion, radius=1, color='black')
         myvtk.plt_line(renderer, lateral_acromion, inferior_angle, color='black')

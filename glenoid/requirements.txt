@@ -1,3 +1,5 @@
 vtk
 scipy
 pyvista
+imageio_ffmpeg
+tqdm

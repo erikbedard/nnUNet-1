@@ -829,7 +829,7 @@ def create_mesh_from_image_labels(image_labels: vtkImageData, label_num: int, ou
     elif output == 'smooth':
         method = 'flying_edges'
         mesh = convert_voxels_to_poly(mask, method=method)
-        mesh = decimate_polydata(mesh, target=60000)
+        mesh = decimate_polydata(mesh)
         mesh = smooth_polydata(mesh, n_iterations=15)
     elif output == 'uniform':
 
