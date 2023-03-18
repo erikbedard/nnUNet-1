@@ -51,10 +51,10 @@ class Evaluator:
     ]
 
     default_advanced_metrics = [
-        #"Hausdorff Distance",
+        "Hausdorff Distance",
         "Hausdorff Distance 95",
         "Avg. Surface Distance",
-        #"Avg. Symmetric Surface Distance"
+        "Avg. Symmetric Surface Distance"
     ]
 
     def __init__(self,
@@ -353,6 +353,8 @@ def aggregate_scores(test_ref_pairs,
     all_scores = OrderedDict()
     all_scores["all"] = []
     all_scores["mean"] = OrderedDict()
+    all_scores["min"] = OrderedDict()
+    all_scores["max"] = OrderedDict()
 
     test = [i[0] for i in test_ref_pairs]
     ref = [i[1] for i in test_ref_pairs]
@@ -370,17 +372,26 @@ def aggregate_scores(test_ref_pairs,
                 continue
             if label not in all_scores["mean"]:
                 all_scores["mean"][label] = OrderedDict()
+                all_scores["min"][label] = OrderedDict()
+                all_scores["max"][label] = OrderedDict()
             for score, value in score_dict.items():
                 if score not in all_scores["mean"][label]:
                     all_scores["mean"][label][score] = []
+                    all_scores["min"][label][score] = []
+                    all_scores["max"][label][score] = []
                 all_scores["mean"][label][score].append(value)
 
     for label in all_scores["mean"]:
         for score in all_scores["mean"][label]:
+            scores = all_scores["mean"][label][score]
             if nanmean:
-                all_scores["mean"][label][score] = float(np.nanmean(all_scores["mean"][label][score]))
+                all_scores["mean"][label][score] = float(np.nanmean(scores))
+                all_scores["min"][label][score] = float(np.nanmin(scores))
+                all_scores["max"][label][score] = float(np.nanmax(scores))
             else:
-                all_scores["mean"][label][score] = float(np.mean(all_scores["mean"][label][score]))
+                all_scores["mean"][label][score] = float(np.mean(scores))
+                all_scores["min"][label][score] = float(np.min(scores))
+                all_scores["max"][label][score] = float(np.max(scores))
 
     # save to file if desired
     # we create a hopefully unique id by hashing the entire output dictionary
